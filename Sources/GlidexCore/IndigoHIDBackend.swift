@@ -123,6 +123,18 @@ final class IndigoHIDBackend {
         )
     }
 
+    func makeLiveTwoFingerTouchSession(on simulator: BootedSimulatorRecord, simDevice: AnyObject) throws -> LiveTwoFingerTouchSession {
+        let hidClient = try SimulatorHIDClient.make(simDevice: simDevice, simulatorKit: simulatorKit, logger: logger)
+        let metrics = resolveScreenMetrics(for: simDevice, fallback: simulator)
+        logger.info("created live two-finger touch session simulator=\(simulator.udid) screen_metrics points=\(Int(metrics.pointSize.width))x\(Int(metrics.pointSize.height)) scale=\(metrics.scale)")
+        return LiveTwoFingerTouchSession(
+            hidClient: hidClient,
+            metrics: metrics,
+            logger: logger,
+            dumpsHIDMessages: dumpsHIDMessages
+        )
+    }
+
     private func makeDigitizerView(simDevice: AnyObject, metrics: ScreenMetrics) throws -> AnyObject {
         try simulatorKit.load()
         let frame = CGRect(origin: .zero, size: metrics.pointSize)

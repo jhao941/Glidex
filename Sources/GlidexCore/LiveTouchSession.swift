@@ -44,8 +44,11 @@ public final class LiveTouchSession: @unchecked Sendable {
         }
     }
 
-    public func end(at point: CGPoint? = nil) {
+    public func end(at point: CGPoint? = nil, delay: TimeInterval = 0) {
         enqueue { state in
+            if delay > 0 {
+                Thread.sleep(forTimeInterval: delay)
+            }
             guard state.isActive else { return }
             let endPoint = point.map(state.clamped) ?? state.currentPoint
             if let endPoint {

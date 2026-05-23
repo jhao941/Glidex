@@ -61,9 +61,19 @@ private final class CaptureView: NSView {
     weak var hostWindow: NSWindow?
     private var calibration = CalibrationState.defaultState
     private var calibrationDragMode: CalibrationDragMode?
+    private var pendingMouseDownLocalPoint: CGPoint?
+    private var pendingMouseDownSimulatorPoint: CGPoint?
+    private var liveTapSession: LiveTouchSession?
     private var liveDragSession: LiveTouchSession?
     private var liveDragPoint: CGPoint?
-    private var magnificationStartTime: Date?
+    private var livePinchSession: LiveTwoFingerTouchSession?
+    private var livePinchCenter: CGPoint?
+    private var livePinchBaseRadius: CGFloat = 90
+    private var livePinchCurrentRadius: CGFloat = 90
+    private var livePinchLastMagnification: CGFloat = 0
+    private var livePinchStartTime: TimeInterval?
+    private var livePinchUpdateCount = 0
+    private var suppressClickUntil: TimeInterval = 0
     private var accumulatedMagnification: CGFloat = 0
     private var isOverlayMode = false
     private var followsSimulatorWindow = false
@@ -152,7 +162,22 @@ private final class CaptureView: NSView {
             return
         }
 
-        beginLiveDrag(event)
+        beginPendingTouch(event)
+    }
+
+    private func beginPendingTouch(_ event: NSEvent) {
+        endLiveScroll()
+        endLivePinch()
+        let localPoint = convert(event.locationInWindow, from: nil)
+        guard let simulatorPoint = calibration.simulatorPoint(from: localPoint) else {
+            logger.warn("capture touch ignored outside calibration rect local=\(format(localPoint))")
+            pendingMouseDownLocalPoint = nil
+            pendingMouseDownSimulatorPoint = nil
+            return
+        }
+
+        pendingMouseDownLocalPoint = localPoint
+        pendingMouseDownSimulatorPoint = simulatorPoint
     }
 
     private func beginCalibrationMouseDrag(_ event: NSEvent) {
@@ -196,14 +221,7 @@ private final class CaptureView: NSView {
         needsDisplay = true
     }
 
-    private func beginLiveDrag(_ event: NSEvent) {
-        endLiveScroll()
-        let localPoint = convert(event.locationInWindow, from: nil)
-        guard let simulatorPoint = calibration.simulatorPoint(from: localPoint) else {
-            logger.warn("capture live drag ignored outside calibration rect local=\(format(localPoint))")
-            return
-        }
-
+    private func beginLiveDrag(at simulatorPoint: CGPoint) {
         do {
             let session = try injector.makeLiveTouchSession()
             liveDragSession = session
@@ -216,13 +234,21 @@ private final class CaptureView: NSView {
     }
 
     private func updateLiveDrag(_ event: NSEvent) {
-        guard let session = liveDragSession else { return }
         let localPoint = convert(event.locationInWindow, from: nil)
         guard let simulatorPoint = calibration.simulatorPoint(from: localPoint) else {
             logger.warn("capture live drag ended outside calibration rect local=\(format(localPoint))")
             endLiveDrag(at: liveDragPoint)
             return
         }
+
+        if liveDragSession == nil {
+            guard let startLocalPoint = pendingMouseDownLocalPoint,
+                  let startSimulatorPoint = pendingMouseDownSimulatorPoint else { return }
+            guard startLocalPoint.distance(to: localPoint) >= 3 else { return }
+            beginLiveDrag(at: startSimulatorPoint)
+        }
+
+        guard let session = liveDragSession else { return }
         liveDragPoint = simulatorPoint
         session.update(to: simulatorPoint)
     }
@@ -238,6 +264,8 @@ private final class CaptureView: NSView {
         session.end(at: point)
         liveDragSession = nil
         liveDragPoint = nil
+        pendingMouseDownLocalPoint = nil
+        pendingMouseDownSimulatorPoint = nil
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -246,7 +274,13 @@ private final class CaptureView: NSView {
             return
         }
 
-        endLiveDrag(event)
+        if liveDragSession != nil {
+            endLiveDrag(event)
+        } else if let simulatorPoint = pendingMouseDownSimulatorPoint {
+            performTap(at: simulatorPoint)
+        }
+        pendingMouseDownLocalPoint = nil
+        pendingMouseDownSimulatorPoint = nil
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -344,6 +378,7 @@ private final class CaptureView: NSView {
             return liveScrollSession
         }
 
+        endLivePinch()
         do {
             let session = try injector.makeLiveTouchSession()
             let startPoint = calibration.clampedSimulatorPoint(point)
@@ -501,10 +536,6 @@ private final class CaptureView: NSView {
     }
 
     private func setupGestures() {
-        let click = NSClickGestureRecognizer(target: self, action: #selector(handleClick(_:)))
-        click.numberOfClicksRequired = 1
-        addGestureRecognizer(click)
-
         let pan = NSPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         addGestureRecognizer(pan)
 
@@ -603,16 +634,32 @@ private final class CaptureView: NSView {
 
     @objc private func handleClick(_ gesture: NSClickGestureRecognizer) {
         guard calibration.isLocked, gesture.state == .ended else { return }
+        guard livePinchSession == nil, Date().timeIntervalSinceReferenceDate >= suppressClickUntil else {
+            logger.info("capture click suppressed during pinch")
+            return
+        }
         let localPoint = gesture.location(in: self)
         guard let simulatorPoint = calibration.simulatorPoint(from: localPoint) else {
             logger.warn("capture click ignored outside calibration rect local=\(format(localPoint))")
             return
         }
         logger.info("capture click local=\(format(localPoint)) simulator=\(format(simulatorPoint))")
-        let injector = self.injector
+        performTap(at: simulatorPoint)
+    }
 
-        runInjection {
-            try injector.tap(at: simulatorPoint)
+    private func performTap(at simulatorPoint: CGPoint) {
+        guard Date().timeIntervalSinceReferenceDate >= suppressClickUntil else {
+            logger.info("capture tap suppressed during pinch")
+            return
+        }
+        logger.info("capture tap simulator=\(format(simulatorPoint))")
+        do {
+            let session = try liveTapSession ?? injector.makeLiveTouchSession()
+            liveTapSession = session
+            session.begin(at: simulatorPoint)
+            session.end(at: simulatorPoint, delay: 0.055)
+        } catch {
+            logger.error("capture tap failed: \(error)")
         }
     }
 
@@ -662,30 +709,119 @@ private final class CaptureView: NSView {
 
         switch gesture.state {
         case .began:
-            guard calibration.captureRect.contains(localPoint) else { return }
-            magnificationStartTime = Date()
-            accumulatedMagnification = 0
-            logger.info("capture pinch began local=\(format(localPoint))")
+            beginLivePinch(at: localPoint)
         case .changed:
-            accumulatedMagnification += gesture.magnification
+            updateLivePinch(magnification: gesture.magnification)
         case .ended, .cancelled:
-            guard let center = calibration.simulatorPoint(from: localPoint) else {
-                logger.warn("capture pinch ignored outside calibration rect")
-                return
-            }
-            let scale = max(0.2, Double(1 + accumulatedMagnification))
-            let duration = Date().timeIntervalSince(magnificationStartTime ?? Date())
-            magnificationStartTime = nil
-            accumulatedMagnification = 0
-            logger.info("capture pinch ended center=\(format(center)) scale=\(String(format: "%.3f", scale)) duration=\(String(format: "%.3f", duration))")
-            let injector = self.injector
-
-            runInjection {
-                try injector.pinch(center: center, scale: scale, duration: max(0.2, duration))
-            }
+            endLivePinch()
         default:
             break
         }
+    }
+
+    private func beginLivePinch(at localPoint: CGPoint) {
+        guard let center = calibration.simulatorPoint(from: localPoint) else {
+            logger.warn("capture live pinch ignored outside calibration rect local=\(format(localPoint))")
+            return
+        }
+
+        endLiveScroll()
+        endLiveDrag(at: liveDragPoint)
+
+        do {
+            let session = try injector.makeLiveTwoFingerTouchSession()
+            let radius = pinchRadius(for: 1)
+            let fingers = pinchFingers(center: center, radius: radius)
+            livePinchSession = session
+            livePinchCenter = center
+            livePinchBaseRadius = radius
+            livePinchCurrentRadius = radius
+            livePinchLastMagnification = 0
+            livePinchStartTime = Date().timeIntervalSinceReferenceDate
+            livePinchUpdateCount = 0
+            suppressClickUntil = Date().timeIntervalSinceReferenceDate + 0.35
+            accumulatedMagnification = 0
+            logger.info("capture live pinch began center=\(format(center)) radius=\(Int(radius))")
+            session.begin(finger1: fingers.0, finger2: fingers.1)
+        } catch {
+            logger.error("capture live pinch failed to begin: \(error)")
+        }
+    }
+
+    private func updateLivePinch(magnification: CGFloat) {
+        guard let session = livePinchSession, let center = livePinchCenter else { return }
+        let delta = magnification - livePinchLastMagnification
+        livePinchLastMagnification = magnification
+        accumulatedMagnification = magnification
+        let radius = clampedPinchRadius(livePinchCurrentRadius + delta * 130)
+        guard abs(radius - livePinchCurrentRadius) >= 0.75 else { return }
+        let fingers = pinchFingers(center: center, radius: radius)
+        livePinchCurrentRadius = radius
+        livePinchUpdateCount += 1
+        logger.info("capture live pinch update center=\(format(center)) magnification=\(String(format: "%.3f", Double(magnification))) delta=\(String(format: "%.3f", Double(delta))) radius=\(Int(radius))")
+        session.update(finger1: fingers.0, finger2: fingers.1)
+    }
+
+    private func endLivePinch() {
+        guard let session = livePinchSession else { return }
+        let center = livePinchCenter
+        if let center {
+            sendPinchTailIfNeeded(session: session, center: center)
+        }
+        let fingers = center.map { pinchFingers(center: $0, radius: livePinchCurrentRadius) }
+        logger.info("capture live pinch ended center=\(center.map(format) ?? "nil")")
+        session.end(finger1: fingers?.0, finger2: fingers?.1, delay: 1.0 / 60.0)
+        suppressClickUntil = Date().timeIntervalSinceReferenceDate + 0.12
+        livePinchSession = nil
+        livePinchCenter = nil
+        livePinchBaseRadius = 90
+        livePinchCurrentRadius = 90
+        livePinchLastMagnification = 0
+        livePinchStartTime = nil
+        livePinchUpdateCount = 0
+        accumulatedMagnification = 0
+    }
+
+    private func sendPinchTailIfNeeded(session: LiveTwoFingerTouchSession, center: CGPoint) {
+        let elapsed = Date().timeIntervalSinceReferenceDate - (livePinchStartTime ?? Date().timeIntervalSinceReferenceDate)
+        let radiusDelta = livePinchCurrentRadius - livePinchBaseRadius
+        let minimumFrames = 5
+        let needsTail = elapsed < 0.12 || livePinchUpdateCount < minimumFrames || abs(radiusDelta) < 12
+        guard needsTail else { return }
+
+        let direction: CGFloat
+        if abs(radiusDelta) >= 1 {
+            direction = radiusDelta.sign == .minus ? -1 : 1
+        } else {
+            direction = accumulatedMagnification < 0 ? -1 : 1
+        }
+        let minimumDelta = max(abs(radiusDelta), 24)
+        let targetRadius = clampedPinchRadius(livePinchBaseRadius + direction * minimumDelta)
+        let startRadius = livePinchCurrentRadius
+        let frames = max(1, minimumFrames - livePinchUpdateCount)
+
+        logger.info("capture live pinch tail frames=\(frames) from_radius=\(Int(startRadius)) to_radius=\(Int(targetRadius)) elapsed_ms=\(Int(elapsed * 1000)) updates=\(livePinchUpdateCount)")
+        for index in 1...frames {
+            let progress = CGFloat(index) / CGFloat(frames)
+            let radius = startRadius + (targetRadius - startRadius) * progress
+            let fingers = pinchFingers(center: center, radius: radius)
+            session.update(finger1: fingers.0, finger2: fingers.1, delay: 1.0 / 60.0)
+            livePinchCurrentRadius = radius
+        }
+    }
+
+    private func pinchRadius(for scale: CGFloat) -> CGFloat {
+        clampedPinchRadius(livePinchBaseRadius * scale)
+    }
+
+    private func clampedPinchRadius(_ radius: CGFloat) -> CGFloat {
+        min(max(radius, 8), min(calibration.simulatorSize.width, calibration.simulatorSize.height) * 0.49)
+    }
+
+    private func pinchFingers(center: CGPoint, radius: CGFloat) -> (CGPoint, CGPoint) {
+        let finger1 = calibration.clampedSimulatorPoint(CGPoint(x: center.x - radius, y: center.y))
+        let finger2 = calibration.clampedSimulatorPoint(CGPoint(x: center.x + radius, y: center.y))
+        return (finger1, finger2)
     }
 
     private func runInjection(_ action: @escaping @Sendable () throws -> Void) {
