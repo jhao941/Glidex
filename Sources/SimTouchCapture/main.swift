@@ -24,6 +24,7 @@ struct SimTouchCaptureMain {
         window.delegate = windowDelegate
         window.center()
         window.contentView = contentView
+        contentView.hostWindow = window
         window.makeKeyAndOrderFront(nil)
 
         app.finishLaunching()
@@ -52,11 +53,13 @@ private final class CaptureView: NSView {
     private let logger: Logger
     private let injector: SimulatorInjector
     private let injectionQueue = DispatchQueue(label: "simtouch.capture.injection", qos: .userInitiated)
+    weak var hostWindow: NSWindow?
     private var calibration = CalibrationState.defaultState
     private var calibrationDragMode: CalibrationDragMode?
     private var gesturePanStart: CGPoint?
     private var magnificationStartTime: Date?
     private var accumulatedMagnification: CGFloat = 0
+    private var isOverlayMode = false
 
     init(logger: Logger) {
         self.logger = logger
@@ -108,6 +111,10 @@ private final class CaptureView: NSView {
             calibration.isLocked.toggle()
             logger.info("capture calibration \(calibration.isLocked ? "locked" : "unlocked") rect=\(format(calibration.captureRect))")
             needsDisplay = true
+        case "o":
+            attachToSimulatorWindow()
+        case "t":
+            toggleOverlayMode()
         case "r":
             calibration.captureRect = defaultCaptureRect(in: bounds)
             calibration.isLocked = false
@@ -162,6 +169,36 @@ private final class CaptureView: NSView {
         super.mouseUp(with: event)
     }
 
+    override func scrollWheel(with event: NSEvent) {
+        guard calibration.isLocked else {
+            super.scrollWheel(with: event)
+            return
+        }
+
+        let localPoint = convert(event.locationInWindow, from: nil)
+        guard let center = calibration.simulatorPoint(from: localPoint) else {
+            super.scrollWheel(with: event)
+            return
+        }
+
+        let deltaX = event.scrollingDeltaX
+        let deltaY = event.scrollingDeltaY
+        let magnitude = hypot(deltaX, deltaY)
+        guard magnitude >= 1 else { return }
+
+        let gain: CGFloat = event.hasPreciseScrollingDeltas ? 2.0 : 8.0
+        let end = calibration.clampedSimulatorPoint(CGPoint(
+            x: center.x + deltaX * gain,
+            y: center.y + deltaY * gain
+        ))
+        logger.info("capture two-finger swipe center=\(format(center)) end=\(format(end)) delta=(\(Int(deltaX)), \(Int(deltaY)))")
+        let injector = self.injector
+
+        runInjection {
+            try injector.drag(from: center, to: end, duration: 0.18)
+        }
+    }
+
     private func setupGestures() {
         let click = NSClickGestureRecognizer(target: self, action: #selector(handleClick(_:)))
         click.numberOfClicksRequired = 1
@@ -172,6 +209,33 @@ private final class CaptureView: NSView {
 
         let magnify = NSMagnificationGestureRecognizer(target: self, action: #selector(handleMagnification(_:)))
         addGestureRecognizer(magnify)
+    }
+
+    private func attachToSimulatorWindow() {
+        guard let frame = SimulatorWindowLocator.findSimulatorWindowFrame() else {
+            logger.warn("capture overlay attach failed: Simulator window not found")
+            return
+        }
+
+        hostWindow?.setFrame(frame, display: true, animate: true)
+        hostWindow?.level = .floating
+        hostWindow?.makeKeyAndOrderFront(nil)
+        calibration.captureRect = defaultCaptureRect(in: CGRect(origin: .zero, size: frame.size))
+        calibration.isLocked = false
+        logger.info("capture attached to Simulator window frame=\(format(frame)) calibration=\(format(calibration.captureRect))")
+        needsDisplay = true
+    }
+
+    private func toggleOverlayMode() {
+        isOverlayMode.toggle()
+        hostWindow?.isOpaque = !isOverlayMode
+        hostWindow?.backgroundColor = isOverlayMode ? .clear : .windowBackgroundColor
+        hostWindow?.alphaValue = isOverlayMode ? 0.72 : 1.0
+        hostWindow?.level = isOverlayMode ? .floating : .normal
+        hostWindow?.hasShadow = !isOverlayMode
+        layer?.backgroundColor = isOverlayMode ? NSColor.clear.cgColor : NSColor.windowBackgroundColor.cgColor
+        logger.info("capture overlay mode \(isOverlayMode ? "enabled" : "disabled")")
+        needsDisplay = true
     }
 
     @objc private func handleClick(_ gesture: NSClickGestureRecognizer) {
@@ -315,7 +379,7 @@ private final class CaptureView: NSView {
 
     private func drawChrome() {
         let status = calibration.isLocked ? "Locked" : "Calibration"
-        let detail = calibration.isLocked ? "Click, drag, or pinch inside the frame" : "Drag frame, drag corner to resize, L locks, R resets"
+        let detail = calibration.isLocked ? "Click, drag, scroll, or pinch inside the frame" : "Drag frame, drag corner to resize, L locks, R resets, O attaches, T fades"
         drawCenteredLabel("SimTouch Capture - \(status)", y: bounds.maxY - 38, fontSize: 18, weight: .semibold)
         drawCenteredLabel(detail, y: bounds.maxY - 64, fontSize: 12, weight: .regular)
     }
@@ -401,6 +465,46 @@ private struct CalibrationState {
         return CGPoint(
             x: normalizedX * simulatorSize.width,
             y: normalizedYFromTop * simulatorSize.height
+        )
+    }
+
+    func clampedSimulatorPoint(_ point: CGPoint) -> CGPoint {
+        CGPoint(
+            x: min(max(point.x, 0), simulatorSize.width),
+            y: min(max(point.y, 0), simulatorSize.height)
+        )
+    }
+}
+
+private enum SimulatorWindowLocator {
+    static func findSimulatorWindowFrame() -> CGRect? {
+        let options = CGWindowListOption(arrayLiteral: .optionOnScreenOnly, .excludeDesktopElements)
+        guard let windowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return nil
+        }
+
+        for window in windowList {
+            let owner = window[kCGWindowOwnerName as String] as? String ?? ""
+            guard owner == "Simulator" else { continue }
+            guard let bounds = window[kCGWindowBounds as String] as? [String: CGFloat],
+                  let x = bounds["X"],
+                  let y = bounds["Y"],
+                  let width = bounds["Width"],
+                  let height = bounds["Height"] else {
+                continue
+            }
+            return appKitFrameFromCGWindowBounds(CGRect(x: x, y: y, width: width, height: height))
+        }
+        return nil
+    }
+
+    private static func appKitFrameFromCGWindowBounds(_ bounds: CGRect) -> CGRect {
+        let screenFrame = NSScreen.screens.first?.frame ?? .zero
+        return CGRect(
+            x: bounds.minX,
+            y: screenFrame.maxY - bounds.minY - bounds.height,
+            width: bounds.width,
+            height: bounds.height
         )
     }
 }

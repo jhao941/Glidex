@@ -8,12 +8,12 @@ Current scope:
 - dynamically load `CoreSimulator.framework` and `SimulatorKit.framework`
 - probe `SimServiceContext`, `SimDeviceSet`, `SimDeviceLegacyHIDClient`, and Indigo HID symbols
 - scaffold `tap`, `drag`, and `pinch` commands with detailed logging
-- provide a minimal AppKit capture window for early Mac gesture experiments
+- provide a minimal AppKit capture window / overlay for early Mac gesture experiments
 
 Current non-goals:
 
 - no menu bar app
-- no overlay window or automatic Simulator window tracking yet
+- no automatic Simulator window tracking yet
 - no `MultitouchSupport.framework`
 - no product architecture beyond the minimum needed to validate injection
 
@@ -49,7 +49,7 @@ Key files:
 - `Sources/SimTouchCore/SimulatorInjector.swift`: command orchestration
 - `Sources/SimTouchCore/GestureSynthesizer.swift`: higher-level gesture sequencing
 - `Sources/SimTouchCore/TouchMessageBuilder.swift`: Indigo digitizer message construction
-- `Sources/SimTouchCapture/main.swift`: minimal AppKit gesture capture window for click, drag, and pinch experiments
+- `Sources/SimTouchCapture/main.swift`: minimal AppKit gesture capture window / overlay for click, drag, scroll, and pinch experiments
 - `Sources/CSimTouchShim/*`: tiny C shim for Objective-C runtime method enumeration and message construction helpers
 
 ## Build
@@ -82,12 +82,15 @@ The capture window contains a calibration frame that maps local Mac window coord
 
 - click -> `SimulatorInjector.tap`
 - drag -> `SimulatorInjector.drag`
+- two-finger scroll / swipe -> short `SimulatorInjector.drag`
 - pinch gesture capture -> `SimulatorInjector.pinch`
 - unlocked calibration mode: drag the frame to move it, drag the lower-right handle to resize it
+- `O`: attach the capture window to the currently visible Simulator window
+- `T`: toggle translucent overlay mode
 - `L`: lock/unlock calibration
 - `R`: reset calibration
 
-This is intentionally not an overlay yet. The next step is placing this calibrated capture surface over the Simulator display and then replacing the fixed logical size with active-device screen metrics.
+Round 4 makes the capture window manually attach to the visible Simulator window and fade into a translucent overlay. Round 5 maps trackpad two-finger scroll events to simulated drag gestures. The overlay does not yet follow Simulator window moves/resizes automatically, and the capture mapping still uses the fixed logical simulator size until active-device screen metrics are wired into the UI layer.
 
 ## Current status
 
