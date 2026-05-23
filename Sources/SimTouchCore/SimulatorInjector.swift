@@ -1,6 +1,6 @@
 import Foundation
 
-public final class SimulatorInjector {
+public final class SimulatorInjector: @unchecked Sendable {
     private let logger: Logger
     private let loader: PrivateFrameworkLoader
     private let resolver: BootedSimulatorResolver

@@ -8,11 +8,12 @@ Current scope:
 - dynamically load `CoreSimulator.framework` and `SimulatorKit.framework`
 - probe `SimServiceContext`, `SimDeviceSet`, `SimDeviceLegacyHIDClient`, and Indigo HID symbols
 - scaffold `tap`, `drag`, and `pinch` commands with detailed logging
+- provide a minimal AppKit capture window for early Mac gesture experiments
 
 Current non-goals:
 
 - no menu bar app
-- no GUI
+- no overlay window or automatic Simulator window tracking yet
 - no `MultitouchSupport.framework`
 - no product architecture beyond the minimum needed to validate injection
 
@@ -33,6 +34,8 @@ Current non-goals:
     │   ├── IndigoHIDBackend.swift
     │   ├── TouchMessageBuilder.swift
     │   └── ...
+    ├── SimTouchCapture
+    │   └── main.swift
     └── simtouchCLI
         ├── CLI.swift
         └── main.swift
@@ -46,6 +49,7 @@ Key files:
 - `Sources/SimTouchCore/SimulatorInjector.swift`: command orchestration
 - `Sources/SimTouchCore/GestureSynthesizer.swift`: higher-level gesture sequencing
 - `Sources/SimTouchCore/TouchMessageBuilder.swift`: Indigo digitizer message construction
+- `Sources/SimTouchCapture/main.swift`: minimal AppKit gesture capture window for click, drag, and pinch experiments
 - `Sources/CSimTouchShim/*`: tiny C shim for Objective-C runtime method enumeration and message construction helpers
 
 ## Build
@@ -65,6 +69,22 @@ swift run simtouch drag --from 120,300 --to 120,700 --duration 0.5
 swift run simtouch pinch --center 200,400 --scale 1.2 --duration 0.5
 swift run simtouch pinch --center 200,400 --scale 0.8 --duration 0.5
 ```
+
+## Capture App Prototype
+
+Round 2 adds a minimal AppKit capture window:
+
+```bash
+swift run simtouch-capture
+```
+
+The capture window currently uses a fixed 402 x 874 simulator-point mapping, matching the observed iPhone 16 Pro logical screen size. It supports:
+
+- click -> `SimulatorInjector.tap`
+- drag -> `SimulatorInjector.drag`
+- pinch gesture capture -> `SimulatorInjector.pinch`
+
+This is intentionally not an overlay yet. The next step is calibration: mapping the capture window or overlay rect to the active Simulator display rather than assuming a fixed logical size.
 
 ## Current status
 

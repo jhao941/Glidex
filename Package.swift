@@ -9,6 +9,7 @@ let package = Package(
     products: [
         .library(name: "SimTouchCore", targets: ["SimTouchCore"]),
         .executable(name: "simtouch", targets: ["simtouch"]),
+        .executable(name: "simtouch-capture", targets: ["SimTouchCapture"]),
     ],
     targets: [
         .target(
@@ -28,6 +29,16 @@ let package = Package(
             name: "simtouch",
             dependencies: ["SimTouchCore"],
             path: "Sources/simtouchCLI"
+        ),
+        .executableTarget(
+            name: "SimTouchCapture",
+            dependencies: ["SimTouchCore"],
+            path: "Sources/SimTouchCapture",
+            linkerSettings: [
+                .linkedFramework("AppKit"),
+                .linkedFramework("CoreGraphics"),
+                .linkedFramework("Foundation"),
+            ]
         ),
     ]
 )

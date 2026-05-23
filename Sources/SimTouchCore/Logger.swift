@@ -1,7 +1,8 @@
 import Foundation
 
-public final class Logger {
+public final class Logger: @unchecked Sendable {
     public init() {}
+    private let lock = NSLock()
     private let dateFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -10,10 +11,12 @@ public final class Logger {
 
     public func info(_ message: String) {
         print("[INFO] \(timestamp()) \(message)")
+        fflush(stdout)
     }
 
     public func warn(_ message: String) {
         print("[WARN] \(timestamp()) \(message)")
+        fflush(stdout)
     }
 
     public func error(_ message: String) {
@@ -22,9 +25,12 @@ public final class Logger {
 
     public func debug(_ message: String) {
         print("[DEBUG] \(timestamp()) \(message)")
+        fflush(stdout)
     }
 
     private func timestamp() -> String {
-        dateFormatter.string(from: Date())
+        lock.lock()
+        defer { lock.unlock() }
+        return dateFormatter.string(from: Date())
     }
 }
