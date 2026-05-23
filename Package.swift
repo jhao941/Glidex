@@ -2,23 +2,23 @@
 import PackageDescription
 
 let package = Package(
-    name: "SimTouch",
+    name: "Glidex",
     platforms: [
         .macOS(.v14),
     ],
     products: [
-        .library(name: "SimTouchCore", targets: ["SimTouchCore"]),
-        .executable(name: "simtouch", targets: ["simtouch"]),
-        .executable(name: "simtouch-capture", targets: ["SimTouchCapture"]),
+        .library(name: "GlidexCore", targets: ["GlidexCore"]),
+        .executable(name: "glidex", targets: ["glidex"]),
+        .executable(name: "glidex-capture", targets: ["GlidexCapture"]),
     ],
     targets: [
         .target(
-            name: "CSimTouchShim",
+            name: "CGlidexShim",
             publicHeadersPath: "include"
         ),
         .target(
-            name: "SimTouchCore",
-            dependencies: ["CSimTouchShim"],
+            name: "GlidexCore",
+            dependencies: ["CGlidexShim"],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("CoreGraphics"),
@@ -26,14 +26,14 @@ let package = Package(
             ]
         ),
         .executableTarget(
-            name: "simtouch",
-            dependencies: ["SimTouchCore"],
-            path: "Sources/simtouchCLI"
+            name: "glidex",
+            dependencies: ["GlidexCore"],
+            path: "Sources/glidexCLI"
         ),
         .executableTarget(
-            name: "SimTouchCapture",
-            dependencies: ["SimTouchCore"],
-            path: "Sources/SimTouchCapture",
+            name: "GlidexCapture",
+            dependencies: ["GlidexCore"],
+            path: "Sources/GlidexCapture",
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("CoreGraphics"),

@@ -1,4 +1,4 @@
-import CSimTouchShim
+import CGlidexShim
 import Foundation
 
 enum ObjCInvoker {

@@ -21,7 +21,7 @@ final class PrivateFrameworkLoader {
         }
         guard let handle = dlopen(path, RTLD_NOW | RTLD_LOCAL) else {
             let error = String(cString: dlerror())
-            throw SimTouchError.frameworkLoadFailed("failed to dlopen \(path): \(error)")
+            throw GlidexError.frameworkLoadFailed("failed to dlopen \(path): \(error)")
         }
         let framework = PrivateFrameworkHandle(path: path, handle: handle)
         loaded[path] = framework
@@ -31,7 +31,7 @@ final class PrivateFrameworkLoader {
 
     func symbol<T>(named name: String, in framework: PrivateFrameworkHandle, as type: T.Type) throws -> T {
         guard let raw = dlsym(framework.handle, name) else {
-            throw SimTouchError.symbolMissing("symbol not found: \(name) in \(framework.path)")
+            throw GlidexError.symbolMissing("symbol not found: \(name) in \(framework.path)")
         }
         return unsafeBitCast(raw, to: type)
     }

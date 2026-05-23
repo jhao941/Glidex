@@ -1,5 +1,5 @@
 import Foundation
-import SimTouchCore
+import GlidexCore
 
 struct CLI {
     private let arguments: [String]
@@ -12,7 +12,7 @@ struct CLI {
 
     func run() async throws {
         guard arguments.count >= 2 else {
-            throw SimTouchError.usage(Self.usage)
+            throw GlidexError.usage(Self.usage)
         }
 
         let command = arguments[1]
@@ -45,7 +45,7 @@ struct CLI {
         case "swift-probe":
             try injector.swiftProbe()
         default:
-            throw SimTouchError.usage("unknown command '\(command)'\n\n\(Self.usage)")
+            throw GlidexError.usage("unknown command '\(command)'\n\n\(Self.usage)")
         }
     }
 
@@ -58,13 +58,13 @@ struct CLI {
 
     static let usage = """
     Usage:
-      simtouch list
-      simtouch probe
-      simtouch swift-probe
-      simtouch tap --x 120 --y 300
-      simtouch digitizer-tap --x 120 --y 300
-      simtouch drag --from 120,300 --to 120,700 --duration 0.5
-      simtouch pinch --center 200,400 --scale 1.2 --duration 0.5
+      glidex list
+      glidex probe
+      glidex swift-probe
+      glidex tap --x 120 --y 300
+      glidex digitizer-tap --x 120 --y 300
+      glidex drag --from 120,300 --to 120,700 --duration 0.5
+      glidex pinch --center 200,400 --scale 1.2 --duration 0.5
     """
 }
 
@@ -77,7 +77,7 @@ struct ArgumentCursor {
 
     func value(for flag: String) throws -> String {
         guard let index = args.firstIndex(of: flag), index + 1 < args.count else {
-            throw SimTouchError.usage("missing value for \(flag)")
+            throw GlidexError.usage("missing value for \(flag)")
         }
         return args[index + 1]
     }
@@ -89,14 +89,14 @@ struct ArgumentCursor {
         if let defaultValue {
             return defaultValue
         }
-        throw SimTouchError.usage("missing numeric value for \(flag)")
+        throw GlidexError.usage("missing numeric value for \(flag)")
     }
 
     func point(for flag: String) throws -> CGPoint {
         let raw = try value(for: flag)
         let parts = raw.split(separator: ",", omittingEmptySubsequences: false)
         guard parts.count == 2, let x = Double(parts[0]), let y = Double(parts[1]) else {
-            throw SimTouchError.usage("expected \(flag) in x,y form")
+            throw GlidexError.usage("expected \(flag) in x,y form")
         }
         return CGPoint(x: x, y: y)
     }

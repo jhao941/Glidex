@@ -11,7 +11,7 @@
 
 /**
  Indigo HID wire format — adapted from FBSimulatorControl's Indigo definitions.
- These structs intentionally model only the wire-level layout used by simtouch.
+ These structs intentionally model only the wire-level layout used by glidex.
  */
 
 typedef struct {

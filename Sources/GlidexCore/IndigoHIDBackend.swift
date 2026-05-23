@@ -1,5 +1,5 @@
 import AppKit
-import CSimTouchShim
+import CGlidexShim
 import Dispatch
 import Foundation
 
@@ -135,14 +135,14 @@ final class IndigoHIDBackend {
 
         guard let digitizerClass = simulatorKit.loader.classNamed("SimulatorKit.SimDigitizerInputView"),
               let digitizerView = allocateAndInitFrame(classObject: digitizerClass, frame: frame) else {
-            throw SimTouchError.classMissing("SimulatorKit.SimDigitizerInputView missing or initWithFrame: failed")
+            throw GlidexError.classMissing("SimulatorKit.SimDigitizerInputView missing or initWithFrame: failed")
         }
         return digitizerView
     }
 
     private func connectDisplayViewIfPossible(_ displayView: NSView, simDevice: AnyObject) throws {
-        guard ProcessInfo.processInfo.environment["SIMTOUCH_ENABLE_DISPLAY_CONNECT"] == "1" else {
-            logger.info("skipping SimDisplayView.connect probe; set SIMTOUCH_ENABLE_DISPLAY_CONNECT=1 to try the experimental SwiftCC connect trampoline")
+        guard ProcessInfo.processInfo.environment["GLIDEX_ENABLE_DISPLAY_CONNECT"] == "1" else {
+            logger.info("skipping SimDisplayView.connect probe; set GLIDEX_ENABLE_DISPLAY_CONNECT=1 to try the experimental SwiftCC connect trampoline")
             return
         }
         guard let screen = makeSimDeviceScreen(simDevice: simDevice, screenID: 1) else {
@@ -150,7 +150,7 @@ final class IndigoHIDBackend {
             return
         }
         guard let framework = simulatorKit.framework else {
-            throw SimTouchError.frameworkLoadFailed("SimulatorKit framework not loaded")
+            throw GlidexError.frameworkLoadFailed("SimulatorKit framework not loaded")
         }
         let symbol = "$s12SimulatorKit14SimDisplayViewC7connect6screen6inputsyAA0C12DeviceScreenC_AC0j5InputI0VtKFTj"
         guard let function = dlsym(framework.handle, symbol) else {
@@ -222,11 +222,11 @@ final class IndigoHIDBackend {
     private func sendDigitizerTouchEvent(digitizerView: AnyObject, hidClient: AnyObject, event: RawTouchEvent) throws {
         try simulatorKit.load()
         guard let framework = simulatorKit.framework else {
-            throw SimTouchError.frameworkLoadFailed("SimulatorKit framework not loaded")
+            throw GlidexError.frameworkLoadFailed("SimulatorKit framework not loaded")
         }
         let symbol = "$s12SimulatorKit24SimDeviceLegacyHIDClientC21simDigitizerInputView_10touchEventyAA0chiJ0C_AG05TouchL0VtF"
         guard let function = dlsym(framework.handle, symbol) else {
-            throw SimTouchError.symbolMissing("swift symbol missing: \(symbol)")
+            throw GlidexError.symbolMissing("swift symbol missing: \(symbol)")
         }
 
         var mutableEvent = event

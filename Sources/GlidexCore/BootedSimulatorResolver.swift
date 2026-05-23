@@ -20,7 +20,7 @@ final class BootedSimulatorResolver {
         _ = try loader.loadFramework(at: coreSimulatorFramework)
 
         guard let simServiceContextClass = loader.classNamed("SimServiceContext") else {
-            throw SimTouchError.classMissing("CoreSimulator class missing: SimServiceContext")
+            throw GlidexError.classMissing("CoreSimulator class missing: SimServiceContext")
         }
 
         let sharedSelector = loader.selector(named: "sharedServiceContextForDeveloperDir:error:")
@@ -34,7 +34,7 @@ final class BootedSimulatorResolver {
             pointer: &contextErrorObject
         ) else {
             let contextError = contextErrorObject as? NSError
-            throw SimTouchError.commandFailed("failed to acquire SimServiceContext: \(contextError?.localizedDescription ?? "nil")")
+            throw GlidexError.commandFailed("failed to acquire SimServiceContext: \(contextError?.localizedDescription ?? "nil")")
         }
         logger.info("resolved SimServiceContext: \(type(of: context))")
 
@@ -43,14 +43,14 @@ final class BootedSimulatorResolver {
         var deviceSetErrorObject: AnyObject?
         guard let deviceSet = ObjCInvoker.object(context, defaultSetSelector, pointer: &deviceSetErrorObject) else {
             let deviceSetError = deviceSetErrorObject as? NSError
-            throw SimTouchError.commandFailed("failed to acquire default SimDeviceSet: \(deviceSetError?.localizedDescription ?? "nil")")
+            throw GlidexError.commandFailed("failed to acquire default SimDeviceSet: \(deviceSetError?.localizedDescription ?? "nil")")
         }
         logger.info("resolved SimDeviceSet: \(type(of: deviceSet))")
 
         let devicesSelector = loader.selector(named: "devicesByUDID")
         logTypeEncoding(type(of: deviceSet), selector: "devicesByUDID")
         guard let devicesByUDID = ObjCInvoker.object(deviceSet, devicesSelector) as? NSDictionary else {
-            throw SimTouchError.commandFailed("failed to fetch devicesByUDID")
+            throw GlidexError.commandFailed("failed to fetch devicesByUDID")
         }
 
         if let uuid = UUID(uuidString: udid), let direct = devicesByUDID[uuid] as AnyObject? {
@@ -63,7 +63,7 @@ final class BootedSimulatorResolver {
         }
 
         let keys = devicesByUDID.allKeys.map { "\($0)" }.sorted().joined(separator: ", ")
-        throw SimTouchError.simulatorNotFound("failed to resolve SimDevice for \(udid); dictionary keys: \(keys)")
+        throw GlidexError.simulatorNotFound("failed to resolve SimDevice for \(udid); dictionary keys: \(keys)")
     }
 
     func probeCoreSimulatorClasses() throws {

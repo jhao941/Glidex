@@ -1,4 +1,4 @@
-import CSimTouchShim
+import CGlidexShim
 import CoreGraphics
 import Foundation
 
@@ -16,7 +16,7 @@ enum TouchMessageBuilder {
             if let errorCString {
                 free(UnsafeMutableRawPointer(mutating: errorCString))
             }
-            throw SimTouchError.commandFailed("failed to create single-touch Indigo message: \(message)")
+            throw GlidexError.commandFailed("failed to create single-touch Indigo message: \(message)")
         }
         if let errorCString {
             free(UnsafeMutableRawPointer(mutating: errorCString))
@@ -32,7 +32,7 @@ enum TouchMessageBuilder {
             if let errorCString {
                 free(UnsafeMutableRawPointer(mutating: errorCString))
             }
-            throw SimTouchError.commandFailed("failed to create two-finger Indigo message: \(message)")
+            throw GlidexError.commandFailed("failed to create two-finger Indigo message: \(message)")
         }
         if let errorCString {
             free(UnsafeMutableRawPointer(mutating: errorCString))

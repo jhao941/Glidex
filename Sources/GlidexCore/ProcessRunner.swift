@@ -20,7 +20,7 @@ enum ProcessRunner {
 
         guard process.terminationStatus == 0 else {
             let text = String(data: err.isEmpty ? out : err, encoding: .utf8) ?? "unknown failure"
-            throw SimTouchError.commandFailed("\(launchPath) \(arguments.joined(separator: " ")) failed: \(text)")
+            throw GlidexError.commandFailed("\(launchPath) \(arguments.joined(separator: " ")) failed: \(text)")
         }
         return out
     }

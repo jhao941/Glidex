@@ -1,4 +1,4 @@
-#import "CSimTouchShim.h"
+#import "CGlidexShim.h"
 #import "IndigoMessageBuilder.h"
 #import "IndigoWireFormat.h"
 

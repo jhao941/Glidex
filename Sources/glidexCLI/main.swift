@@ -1,5 +1,5 @@
 import Foundation
-import SimTouchCore
+import GlidexCore
 
 let logger = Logger()
 

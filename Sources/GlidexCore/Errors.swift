@@ -1,6 +1,6 @@
 import Foundation
 
-public enum SimTouchError: Error, CustomStringConvertible {
+public enum GlidexError: Error, CustomStringConvertible {
     case usage(String)
     case frameworkLoadFailed(String)
     case symbolMissing(String)

@@ -1,4 +1,4 @@
-import CSimTouchShim
+import CGlidexShim
 import Dispatch
 import Foundation
 
@@ -15,12 +15,12 @@ final class SimulatorHIDClient {
     static func make(simDevice: AnyObject, simulatorKit: SimulatorKitLoader, logger: Logger) throws -> SimulatorHIDClient {
         try simulatorKit.load()
         guard let hidClientClass = simulatorKit.loader.classNamed("SimulatorKit.SimDeviceLegacyHIDClient") else {
-            throw SimTouchError.classMissing("SimulatorKit.SimDeviceLegacyHIDClient missing")
+            throw GlidexError.classMissing("SimulatorKit.SimDeviceLegacyHIDClient missing")
         }
 
         let alloc = NSSelectorFromString("alloc")
         guard let allocated = ObjCInvoker.object(hidClientClass as AnyObject, alloc) else {
-            throw SimTouchError.commandFailed("failed to alloc SimDeviceLegacyHIDClient")
+            throw GlidexError.commandFailed("failed to alloc SimDeviceLegacyHIDClient")
         }
 
         let rawClient = try makeRawClient(allocated: allocated, simDevice: simDevice, logger: logger)
@@ -58,7 +58,7 @@ final class SimulatorHIDClient {
             if let encoding = ObjCRuntime.typeEncoding(for: type(of: allocated), selector: "initWithDevice:sessionResetQueue:error:sessionResetHandler:") {
                 logger.info("type_encoding \(NSStringFromClass(type(of: allocated))) initWithDevice:sessionResetQueue:error:sessionResetHandler: = \(encoding)")
             }
-            let queue = DispatchQueue(label: "simtouch.hid.session-reset")
+            let queue = DispatchQueue(label: "glidex.hid.session-reset")
             var errorObject: AnyObject?
             if let client = ObjCInvoker.object(
                 allocated,
@@ -79,7 +79,7 @@ final class SimulatorHIDClient {
         var errorObject: AnyObject?
         guard let client = ObjCInvoker.object(allocated, initSelector, object: simDevice, pointer: &errorObject) else {
             let error = errorObject as? NSError
-            throw SimTouchError.commandFailed("initWithDevice:error: failed: \(error?.localizedDescription ?? "nil")")
+            throw GlidexError.commandFailed("initWithDevice:error: failed: \(error?.localizedDescription ?? "nil")")
         }
         logger.info("created HID client via initWithDevice:error:")
         return client

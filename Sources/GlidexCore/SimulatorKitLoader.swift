@@ -81,7 +81,7 @@ final class SimulatorKitLoader {
     func indigoMouseFactory() throws -> IndigoHIDMessageForMouseNSEventFn {
         try load()
         guard let framework else {
-            throw SimTouchError.frameworkLoadFailed("SimulatorKit framework not loaded")
+            throw GlidexError.frameworkLoadFailed("SimulatorKit framework not loaded")
         }
         return try loader.symbol(
             named: "IndigoHIDMessageForMouseNSEvent",
@@ -93,7 +93,7 @@ final class SimulatorKitLoader {
     func indigoScrollFactory() throws -> IndigoHIDMessageForScrollEventFn {
         try load()
         guard let framework else {
-            throw SimTouchError.frameworkLoadFailed("SimulatorKit framework not loaded")
+            throw GlidexError.frameworkLoadFailed("SimulatorKit framework not loaded")
         }
         return try loader.symbol(
             named: "IndigoHIDMessageForScrollEvent",
@@ -105,7 +105,7 @@ final class SimulatorKitLoader {
     func indigoTargetForScreen() throws -> IndigoHIDTargetForScreenFn {
         try load()
         guard let framework else {
-            throw SimTouchError.frameworkLoadFailed("SimulatorKit framework not loaded")
+            throw GlidexError.frameworkLoadFailed("SimulatorKit framework not loaded")
         }
         return try loader.symbol(named: "IndigoHIDTargetForScreen", in: framework, as: IndigoHIDTargetForScreenFn.self)
     }

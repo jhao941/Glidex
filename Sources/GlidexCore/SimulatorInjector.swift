@@ -25,7 +25,7 @@ public final class SimulatorInjector: @unchecked Sendable {
     public func swiftProbe() throws {
         try simulatorKit.load()
         guard let framework = simulatorKit.framework else {
-            throw SimTouchError.frameworkLoadFailed("SimulatorKit framework not loaded")
+            throw GlidexError.frameworkLoadFailed("SimulatorKit framework not loaded")
         }
         try SwiftMetadataProbe.run(framework: framework, logger: logger)
     }
@@ -61,7 +61,7 @@ public final class SimulatorInjector: @unchecked Sendable {
     private func selectTarget() throws -> BootedSimulatorRecord {
         let devices = try listBootedSimulators()
         guard let first = devices.first else {
-            throw SimTouchError.simulatorNotFound("no booted simulator available")
+            throw GlidexError.simulatorNotFound("no booted simulator available")
         }
         logger.info("selected simulator name=\(first.name) udid=\(first.udid)")
         return first

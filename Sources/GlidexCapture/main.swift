@@ -1,10 +1,10 @@
 import AppKit
 import CoreGraphics
 import Foundation
-import SimTouchCore
+import GlidexCore
 
 @main
-struct SimTouchCaptureMain {
+struct GlidexCaptureMain {
     @MainActor
     static func main() {
         let logger = Logger()
@@ -20,7 +20,7 @@ struct SimTouchCaptureMain {
         )
         let windowDelegate = CaptureWindowDelegate()
 
-        window.title = "SimTouch Capture"
+        window.title = "Glidex Capture"
         window.delegate = windowDelegate
         window.center()
         window.contentView = contentView
@@ -52,7 +52,7 @@ private final class CaptureView: NSView {
 
     private let logger: Logger
     private let injector: SimulatorInjector
-    private let injectionQueue = DispatchQueue(label: "simtouch.capture.injection", qos: .userInitiated)
+    private let injectionQueue = DispatchQueue(label: "glidex.capture.injection", qos: .userInitiated)
     weak var hostWindow: NSWindow?
     private var calibration = CalibrationState.defaultState
     private var calibrationDragMode: CalibrationDragMode?
@@ -480,7 +480,7 @@ private final class CaptureView: NSView {
         let status = calibration.isLocked ? "Locked" : "Calibration"
         let follow = followsSimulatorWindow ? "follow on" : "follow off"
         let detail = calibration.isLocked ? "Click, drag, scroll, or pinch inside the frame" : "Drag frame, drag corner to resize, L locks, R resets, O attaches, F follows, T fades (\(follow))"
-        drawCenteredLabel("SimTouch Capture - \(status)", y: bounds.maxY - 38, fontSize: 18, weight: .semibold)
+        drawCenteredLabel("Glidex Capture - \(status)", y: bounds.maxY - 38, fontSize: 18, weight: .semibold)
         drawCenteredLabel(detail, y: bounds.maxY - 64, fontSize: 12, weight: .regular)
     }
 

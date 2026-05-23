@@ -182,7 +182,7 @@ enum SwiftMetadataProbe {
 
     private static func metadataAccessor(_ symbol: String, framework: PrivateFrameworkHandle) throws -> MetadataAccessorFn {
         guard let raw = dlsym(framework.handle, symbol) else {
-            throw SimTouchError.symbolMissing("swift metadata accessor missing: \(symbol)")
+            throw GlidexError.symbolMissing("swift metadata accessor missing: \(symbol)")
         }
         return unsafeBitCast(raw, to: MetadataAccessorFn.self)
     }
