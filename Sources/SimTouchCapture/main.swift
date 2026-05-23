@@ -62,6 +62,8 @@ private final class CaptureView: NSView {
     private var isOverlayMode = false
     private var followsSimulatorWindow = false
     private var followTimer: Timer?
+    private var isInjectionInFlight = false
+    private var lastScrollInjectionTime: TimeInterval = 0
 
     init(logger: Logger) {
         self.logger = logger
@@ -178,6 +180,7 @@ private final class CaptureView: NSView {
             super.scrollWheel(with: event)
             return
         }
+        guard shouldInjectScroll(event) else { return }
 
         let localPoint = convert(event.locationInWindow, from: nil)
         guard let center = calibration.simulatorPoint(from: localPoint) else {
@@ -188,19 +191,32 @@ private final class CaptureView: NSView {
         let deltaX = event.scrollingDeltaX
         let deltaY = event.scrollingDeltaY
         let magnitude = hypot(deltaX, deltaY)
-        guard magnitude >= 1 else { return }
+        guard magnitude >= 4 else { return }
+        guard !isInjectionInFlight else { return }
+
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastScrollInjectionTime >= 0.12 else { return }
 
         let gain: CGFloat = event.hasPreciseScrollingDeltas ? 2.0 : 8.0
         let end = calibration.clampedSimulatorPoint(CGPoint(
             x: center.x + deltaX * gain,
             y: center.y + deltaY * gain
         ))
+        guard center.distance(to: end) >= 6 else { return }
+
+        lastScrollInjectionTime = now
         logger.info("capture two-finger swipe center=\(format(center)) end=\(format(end)) delta=(\(Int(deltaX)), \(Int(deltaY)))")
         let injector = self.injector
 
-        runInjection {
+        runInjectionIfIdle {
             try injector.drag(from: center, to: end, duration: 0.18)
         }
+    }
+
+    private func shouldInjectScroll(_ event: NSEvent) -> Bool {
+        guard event.momentumPhase.isEmpty else { return false }
+        guard !event.phase.contains(.ended), !event.phase.contains(.cancelled) else { return false }
+        return true
     }
 
     private func setupGestures() {
@@ -427,6 +443,23 @@ private final class CaptureView: NSView {
         }
     }
 
+    private func runInjectionIfIdle(_ action: @escaping @Sendable () throws -> Void) {
+        guard !isInjectionInFlight else { return }
+        isInjectionInFlight = true
+
+        injectionQueue.async { [logger] in
+            do {
+                try action()
+            } catch {
+                logger.error("capture injection failed: \(error)")
+            }
+
+            DispatchQueue.main.async { [weak self] in
+                self?.isInjectionInFlight = false
+            }
+        }
+    }
+
     private func drawCaptureRect() {
         let rect = calibration.captureRect
         NSColor.controlAccentColor.withAlphaComponent(calibration.isLocked ? 0.18 : 0.10).setFill()
@@ -597,5 +630,11 @@ private extension CGRect {
             abs(minY - other.minY) <= tolerance &&
             abs(width - other.width) <= tolerance &&
             abs(height - other.height) <= tolerance
+    }
+}
+
+private extension CGPoint {
+    func distance(to other: CGPoint) -> CGFloat {
+        hypot(x - other.x, y - other.y)
     }
 }
