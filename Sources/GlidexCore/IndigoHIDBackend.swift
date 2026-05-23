@@ -39,10 +39,12 @@ final class IndigoHIDBackend {
 
     private let logger: Logger
     private let simulatorKit: SimulatorKitLoader
+    private let dumpsHIDMessages: Bool
 
     init(logger: Logger, simulatorKit: SimulatorKitLoader) {
         self.logger = logger
         self.simulatorKit = simulatorKit
+        self.dumpsHIDMessages = ProcessInfo.processInfo.environment["GLIDEX_DUMP_HID_MESSAGES"] == "1"
     }
 
     func probeFactories() throws {
@@ -247,7 +249,7 @@ final class IndigoHIDBackend {
             case let .singleTouch(point, direction, description):
                 let message = try TouchMessageBuilder.singleTouch(point: point, screenPointSize: metrics.pointSize, direction: direction)
                 logger.info(description)
-                logger.info("message \(TouchMessageBuilder.describe(message))")
+                logMessageIfEnabled(message)
                 hidClient.send(message: message)
             case let .twoFingerTouch(finger1, finger2, direction, description):
                 let message = try TouchMessageBuilder.twoFingerTouch(
@@ -257,13 +259,18 @@ final class IndigoHIDBackend {
                     direction: direction
                 )
                 logger.info(description)
-                logger.info("message \(TouchMessageBuilder.describe(message))")
+                logMessageIfEnabled(message)
                 hidClient.send(message: message)
             case let .delay(duration, description):
                 logger.info(description)
                 Thread.sleep(forTimeInterval: duration)
             }
         }
+    }
+
+    private func logMessageIfEnabled(_ message: UnsafeMutableRawPointer) {
+        guard dumpsHIDMessages else { return }
+        logger.info("message \(TouchMessageBuilder.describe(message))")
     }
 
     private func resolveScreenMetrics(for simDevice: AnyObject, fallback simulator: BootedSimulatorRecord) -> ScreenMetrics {

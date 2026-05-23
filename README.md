@@ -198,6 +198,8 @@ If a command fails, collect:
 - whether `Simulator.app` was foreground, background, or hidden
 - current simulator model and orientation
 
+Set `GLIDEX_DUMP_HID_MESSAGES=1` only when debugging raw Indigo message layout. It is intentionally off during capture use because it formats private binary message buffers on every injected touch.
+
 Recommended manual commands:
 
 ```bash
