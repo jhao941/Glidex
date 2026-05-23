@@ -13,7 +13,7 @@ struct SimTouchCaptureMain {
 
         let contentView = CaptureView(logger: logger)
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 402, height: 874),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 900),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
@@ -44,11 +44,17 @@ private final class CaptureWindowDelegate: NSObject, NSWindowDelegate {
 }
 
 private final class CaptureView: NSView {
+    private enum CalibrationDragMode {
+        case move(startRect: CGRect, startPoint: CGPoint)
+        case resize(startRect: CGRect, startPoint: CGPoint)
+    }
+
     private let logger: Logger
     private let injector: SimulatorInjector
     private let injectionQueue = DispatchQueue(label: "simtouch.capture.injection", qos: .userInitiated)
-    private let mapper = CaptureCoordinateMapper()
-    private var panStart: CGPoint?
+    private var calibration = CalibrationState.defaultState
+    private var calibrationDragMode: CalibrationDragMode?
+    private var gesturePanStart: CGPoint?
     private var magnificationStartTime: Date?
     private var accumulatedMagnification: CGFloat = 0
 
@@ -79,19 +85,81 @@ private final class CaptureView: NSView {
         window?.makeFirstResponder(self)
     }
 
+    override func layout() {
+        super.layout()
+        if calibration.captureRect == .zero {
+            calibration.captureRect = defaultCaptureRect(in: bounds)
+        }
+        calibration.captureRect = constrainedCaptureRect(calibration.captureRect)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
 
-        NSColor.controlAccentColor.withAlphaComponent(0.18).setFill()
+        NSColor.windowBackgroundColor.setFill()
         bounds.fill()
+        drawCaptureRect()
+        drawChrome()
+    }
 
-        NSColor.controlAccentColor.setStroke()
-        let border = NSBezierPath(rect: bounds.insetBy(dx: 1, dy: 1))
-        border.lineWidth = 2
-        border.stroke()
+    override func keyDown(with event: NSEvent) {
+        switch event.charactersIgnoringModifiers?.lowercased() {
+        case "l":
+            calibration.isLocked.toggle()
+            logger.info("capture calibration \(calibration.isLocked ? "locked" : "unlocked") rect=\(format(calibration.captureRect))")
+            needsDisplay = true
+        case "r":
+            calibration.captureRect = defaultCaptureRect(in: bounds)
+            calibration.isLocked = false
+            logger.info("capture calibration reset rect=\(format(calibration.captureRect))")
+            needsDisplay = true
+        default:
+            super.keyDown(with: event)
+        }
+    }
 
-        drawCenteredLabel("SimTouch Capture", yOffset: 18, fontSize: 20, weight: .semibold)
-        drawCenteredLabel("Click, drag, or pinch in this window", yOffset: -14, fontSize: 13, weight: .regular)
+    override func mouseDown(with event: NSEvent) {
+        guard !calibration.isLocked else {
+            super.mouseDown(with: event)
+            return
+        }
+
+        let point = convert(event.locationInWindow, from: nil)
+        if resizeHandleRect.contains(point) {
+            calibrationDragMode = .resize(startRect: calibration.captureRect, startPoint: point)
+        } else if calibration.captureRect.contains(point) {
+            calibrationDragMode = .move(startRect: calibration.captureRect, startPoint: point)
+        } else {
+            calibrationDragMode = nil
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard !calibration.isLocked, let calibrationDragMode else {
+            super.mouseDragged(with: event)
+            return
+        }
+
+        let point = convert(event.locationInWindow, from: nil)
+        switch calibrationDragMode {
+        case let .move(startRect, startPoint):
+            let delta = CGPoint(x: point.x - startPoint.x, y: point.y - startPoint.y)
+            calibration.captureRect = constrainedCaptureRect(startRect.offsetBy(dx: delta.x, dy: delta.y))
+        case let .resize(startRect, startPoint):
+            let delta = CGPoint(x: point.x - startPoint.x, y: point.y - startPoint.y)
+            calibration.captureRect = constrainedCaptureRect(resizedRect(from: startRect, delta: delta))
+        }
+        needsDisplay = true
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if calibrationDragMode != nil {
+            logger.info("capture calibration updated rect=\(format(calibration.captureRect))")
+            calibrationDragMode = nil
+            needsDisplay = true
+            return
+        }
+        super.mouseUp(with: event)
     }
 
     private func setupGestures() {
@@ -107,9 +175,12 @@ private final class CaptureView: NSView {
     }
 
     @objc private func handleClick(_ gesture: NSClickGestureRecognizer) {
-        guard gesture.state == .ended else { return }
+        guard calibration.isLocked, gesture.state == .ended else { return }
         let localPoint = gesture.location(in: self)
-        let simulatorPoint = mapper.simulatorPoint(from: localPoint, in: bounds)
+        guard let simulatorPoint = calibration.simulatorPoint(from: localPoint) else {
+            logger.warn("capture click ignored outside calibration rect local=\(format(localPoint))")
+            return
+        }
         logger.info("capture click local=\(format(localPoint)) simulator=\(format(simulatorPoint))")
         let injector = self.injector
 
@@ -119,18 +190,27 @@ private final class CaptureView: NSView {
     }
 
     @objc private func handlePan(_ gesture: NSPanGestureRecognizer) {
+        guard calibration.isLocked else {
+            handleCalibrationPan(gesture)
+            return
+        }
+
         let localPoint = gesture.location(in: self)
 
         switch gesture.state {
         case .began:
-            panStart = localPoint
+            guard calibration.captureRect.contains(localPoint) else { return }
+            gesturePanStart = localPoint
             logger.info("capture drag began local=\(format(localPoint))")
         case .ended, .cancelled:
-            guard let panStart else { return }
-            self.panStart = nil
+            guard let gesturePanStart else { return }
+            self.gesturePanStart = nil
 
-            let start = mapper.simulatorPoint(from: panStart, in: bounds)
-            let end = mapper.simulatorPoint(from: localPoint, in: bounds)
+            guard let start = calibration.simulatorPoint(from: gesturePanStart),
+                  let end = calibration.simulatorPoint(from: localPoint) else {
+                logger.warn("capture drag ignored outside calibration rect")
+                return
+            }
             logger.info("capture drag ended simulator=\(format(start))->\(format(end))")
             let injector = self.injector
 
@@ -142,18 +222,56 @@ private final class CaptureView: NSView {
         }
     }
 
+    private func handleCalibrationPan(_ gesture: NSPanGestureRecognizer) {
+        let point = gesture.location(in: self)
+
+        switch gesture.state {
+        case .began:
+            if resizeHandleRect.contains(point) {
+                calibrationDragMode = .resize(startRect: calibration.captureRect, startPoint: point)
+            } else if calibration.captureRect.contains(point) {
+                calibrationDragMode = .move(startRect: calibration.captureRect, startPoint: point)
+            } else {
+                calibrationDragMode = nil
+            }
+        case .changed:
+            guard let calibrationDragMode else { return }
+            switch calibrationDragMode {
+            case let .move(startRect, startPoint):
+                let delta = CGPoint(x: point.x - startPoint.x, y: point.y - startPoint.y)
+                calibration.captureRect = constrainedCaptureRect(startRect.offsetBy(dx: delta.x, dy: delta.y))
+            case let .resize(startRect, startPoint):
+                let delta = CGPoint(x: point.x - startPoint.x, y: point.y - startPoint.y)
+                calibration.captureRect = constrainedCaptureRect(resizedRect(from: startRect, delta: delta))
+            }
+            needsDisplay = true
+        case .ended, .cancelled:
+            guard calibrationDragMode != nil else { return }
+            calibrationDragMode = nil
+            logger.info("capture calibration updated rect=\(format(calibration.captureRect))")
+            needsDisplay = true
+        default:
+            break
+        }
+    }
+
     @objc private func handleMagnification(_ gesture: NSMagnificationGestureRecognizer) {
+        guard calibration.isLocked else { return }
         let localPoint = gesture.location(in: self)
 
         switch gesture.state {
         case .began:
+            guard calibration.captureRect.contains(localPoint) else { return }
             magnificationStartTime = Date()
             accumulatedMagnification = 0
             logger.info("capture pinch began local=\(format(localPoint))")
         case .changed:
             accumulatedMagnification += gesture.magnification
         case .ended, .cancelled:
-            let center = mapper.simulatorPoint(from: localPoint, in: bounds)
+            guard let center = calibration.simulatorPoint(from: localPoint) else {
+                logger.warn("capture pinch ignored outside calibration rect")
+                return
+            }
             let scale = max(0.2, Double(1 + accumulatedMagnification))
             let duration = Date().timeIntervalSince(magnificationStartTime ?? Date())
             magnificationStartTime = nil
@@ -179,36 +297,106 @@ private final class CaptureView: NSView {
         }
     }
 
-    private func drawCenteredLabel(_ text: String, yOffset: CGFloat, fontSize: CGFloat, weight: NSFont.Weight) {
+    private func drawCaptureRect() {
+        let rect = calibration.captureRect
+        NSColor.controlAccentColor.withAlphaComponent(calibration.isLocked ? 0.18 : 0.10).setFill()
+        rect.fill()
+
+        NSColor.controlAccentColor.setStroke()
+        let border = NSBezierPath(rect: rect)
+        border.lineWidth = calibration.isLocked ? 3 : 2
+        border.stroke()
+
+        if !calibration.isLocked {
+            NSColor.controlAccentColor.setFill()
+            resizeHandleRect.fill()
+        }
+    }
+
+    private func drawChrome() {
+        let status = calibration.isLocked ? "Locked" : "Calibration"
+        let detail = calibration.isLocked ? "Click, drag, or pinch inside the frame" : "Drag frame, drag corner to resize, L locks, R resets"
+        drawCenteredLabel("SimTouch Capture - \(status)", y: bounds.maxY - 38, fontSize: 18, weight: .semibold)
+        drawCenteredLabel(detail, y: bounds.maxY - 64, fontSize: 12, weight: .regular)
+    }
+
+    private var resizeHandleRect: CGRect {
+        CGRect(
+            x: calibration.captureRect.maxX - 16,
+            y: calibration.captureRect.minY,
+            width: 16,
+            height: 16
+        )
+    }
+
+    private func defaultCaptureRect(in bounds: CGRect) -> CGRect {
+        let horizontalInset: CGFloat = 48
+        let maxWidth = max(260, bounds.width - horizontalInset * 2)
+        let maxHeight = max(560, bounds.height - 112)
+        let aspect = calibration.simulatorSize.width / calibration.simulatorSize.height
+        var width = min(maxWidth, maxHeight * aspect)
+        var height = width / aspect
+        if height > maxHeight {
+            height = maxHeight
+            width = height * aspect
+        }
+        return CGRect(x: bounds.midX - width / 2, y: bounds.midY - height / 2 - 8, width: width, height: height)
+    }
+
+    private func resizedRect(from rect: CGRect, delta: CGPoint) -> CGRect {
+        let minimumWidth: CGFloat = 180
+        let aspect = calibration.simulatorSize.width / calibration.simulatorSize.height
+        let proposedWidth = max(minimumWidth, rect.width + delta.x)
+        let proposedHeight = proposedWidth / aspect
+        return CGRect(x: rect.minX, y: rect.maxY - proposedHeight, width: proposedWidth, height: proposedHeight)
+    }
+
+    private func constrainedCaptureRect(_ rect: CGRect) -> CGRect {
+        guard bounds.width > 0, bounds.height > 0 else { return rect }
+        let width = min(rect.width, bounds.width)
+        let height = min(rect.height, bounds.height)
+        let x = min(max(rect.minX, bounds.minX), bounds.maxX - width)
+        let y = min(max(rect.minY, bounds.minY), bounds.maxY - height)
+        return CGRect(x: x, y: y, width: width, height: height)
+    }
+
+    private func drawCenteredLabel(_ text: String, y: CGFloat, fontSize: CGFloat, weight: NSFont.Weight) {
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: fontSize, weight: weight),
             .foregroundColor: NSColor.labelColor,
         ]
         let size = text.size(withAttributes: attributes)
-        let point = CGPoint(
-            x: bounds.midX - size.width / 2,
-            y: bounds.midY + yOffset - size.height / 2
-        )
+        let point = CGPoint(x: bounds.midX - size.width / 2, y: y - size.height / 2)
         text.draw(at: point, withAttributes: attributes)
     }
 
     private func format(_ point: CGPoint) -> String {
         "(\(Int(point.x)), \(Int(point.y)))"
     }
+
+    private func format(_ rect: CGRect) -> String {
+        "(x: \(Int(rect.minX)), y: \(Int(rect.minY)), w: \(Int(rect.width)), h: \(Int(rect.height)))"
+    }
 }
 
-private struct CaptureCoordinateMapper {
-    private let simulatorSize = CGSize(width: 402, height: 874)
+private struct CalibrationState {
+    static let defaultState = CalibrationState(
+        captureRect: .zero,
+        simulatorSize: CGSize(width: 402, height: 874),
+        isLocked: false
+    )
 
-    func simulatorPoint(from localPoint: CGPoint, in bounds: CGRect) -> CGPoint {
-        guard bounds.width > 0, bounds.height > 0 else {
-            return .zero
+    var captureRect: CGRect
+    var simulatorSize: CGSize
+    var isLocked: Bool
+
+    func simulatorPoint(from localPoint: CGPoint) -> CGPoint? {
+        guard captureRect.contains(localPoint), captureRect.width > 0, captureRect.height > 0 else {
+            return nil
         }
 
-        let clampedX = min(max(localPoint.x, bounds.minX), bounds.maxX)
-        let clampedY = min(max(localPoint.y, bounds.minY), bounds.maxY)
-        let normalizedX = (clampedX - bounds.minX) / bounds.width
-        let normalizedYFromTop = (bounds.maxY - clampedY) / bounds.height
+        let normalizedX = (localPoint.x - captureRect.minX) / captureRect.width
+        let normalizedYFromTop = (captureRect.maxY - localPoint.y) / captureRect.height
 
         return CGPoint(
             x: normalizedX * simulatorSize.width,

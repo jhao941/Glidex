@@ -78,13 +78,16 @@ Round 2 adds a minimal AppKit capture window:
 swift run simtouch-capture
 ```
 
-The capture window currently uses a fixed 402 x 874 simulator-point mapping, matching the observed iPhone 16 Pro logical screen size. It supports:
+The capture window contains a calibration frame that maps local Mac window coordinates into simulator points. It defaults to a 402 x 874 simulator-point mapping, matching the observed iPhone 16 Pro logical screen size. It supports:
 
 - click -> `SimulatorInjector.tap`
 - drag -> `SimulatorInjector.drag`
 - pinch gesture capture -> `SimulatorInjector.pinch`
+- unlocked calibration mode: drag the frame to move it, drag the lower-right handle to resize it
+- `L`: lock/unlock calibration
+- `R`: reset calibration
 
-This is intentionally not an overlay yet. The next step is calibration: mapping the capture window or overlay rect to the active Simulator display rather than assuming a fixed logical size.
+This is intentionally not an overlay yet. The next step is placing this calibrated capture surface over the Simulator display and then replacing the fixed logical size with active-device screen metrics.
 
 ## Current status
 
