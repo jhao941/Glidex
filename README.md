@@ -86,11 +86,12 @@ The capture window contains a calibration frame that maps local Mac window coord
 - pinch gesture capture -> `SimulatorInjector.pinch`
 - unlocked calibration mode: drag the frame to move it, drag the lower-right handle to resize it
 - `O`: attach the capture window to the currently visible Simulator window
+- `F`: toggle automatic follow for Simulator window moves/resizes
 - `T`: toggle translucent overlay mode
 - `L`: lock/unlock calibration
 - `R`: reset calibration
 
-Round 4 makes the capture window manually attach to the visible Simulator window and fade into a translucent overlay. Round 5 maps trackpad two-finger scroll events to simulated drag gestures. The overlay does not yet follow Simulator window moves/resizes automatically, and the capture mapping still uses the fixed logical simulator size until active-device screen metrics are wired into the UI layer.
+Round 4 makes the capture window manually attach to the visible Simulator window and fade into a translucent overlay. Round 5 maps trackpad two-finger scroll events to simulated drag gestures. Round 6 starts automatic follow after attaching, polling the visible Simulator window and moving/resizing the overlay when the Simulator window changes. The capture mapping still uses the fixed logical simulator size until active-device screen metrics are wired into the UI layer.
 
 ## Current status
 

@@ -60,6 +60,8 @@ private final class CaptureView: NSView {
     private var magnificationStartTime: Date?
     private var accumulatedMagnification: CGFloat = 0
     private var isOverlayMode = false
+    private var followsSimulatorWindow = false
+    private var followTimer: Timer?
 
     init(logger: Logger) {
         self.logger = logger
@@ -113,6 +115,8 @@ private final class CaptureView: NSView {
             needsDisplay = true
         case "o":
             attachToSimulatorWindow()
+        case "f":
+            toggleSimulatorFollow()
         case "t":
             toggleOverlayMode()
         case "r":
@@ -217,13 +221,75 @@ private final class CaptureView: NSView {
             return
         }
 
-        hostWindow?.setFrame(frame, display: true, animate: true)
+        moveOverlay(to: frame, resetCalibration: true, animate: true)
         hostWindow?.level = .floating
         hostWindow?.makeKeyAndOrderFront(nil)
-        calibration.captureRect = defaultCaptureRect(in: CGRect(origin: .zero, size: frame.size))
-        calibration.isLocked = false
+        startSimulatorFollow()
         logger.info("capture attached to Simulator window frame=\(format(frame)) calibration=\(format(calibration.captureRect))")
         needsDisplay = true
+    }
+
+    private func toggleSimulatorFollow() {
+        if followsSimulatorWindow {
+            stopSimulatorFollow()
+        } else {
+            startSimulatorFollow()
+        }
+    }
+
+    private func startSimulatorFollow() {
+        guard !followsSimulatorWindow else { return }
+        followsSimulatorWindow = true
+        let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.syncToSimulatorWindow()
+            }
+        }
+        followTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+        logger.info("capture simulator follow enabled")
+        needsDisplay = true
+    }
+
+    private func stopSimulatorFollow() {
+        guard followsSimulatorWindow else { return }
+        followsSimulatorWindow = false
+        followTimer?.invalidate()
+        followTimer = nil
+        logger.info("capture simulator follow disabled")
+        needsDisplay = true
+    }
+
+    private func syncToSimulatorWindow() {
+        guard let frame = SimulatorWindowLocator.findSimulatorWindowFrame() else {
+            logger.warn("capture simulator follow skipped: Simulator window not found")
+            return
+        }
+
+        guard let currentFrame = hostWindow?.frame, !currentFrame.isNearlyEqual(to: frame) else {
+            return
+        }
+
+        moveOverlay(to: frame, resetCalibration: false, animate: false)
+        logger.info("capture followed Simulator window frame=\(format(frame)) calibration=\(format(calibration.captureRect))")
+        needsDisplay = true
+    }
+
+    private func moveOverlay(to frame: CGRect, resetCalibration: Bool, animate: Bool) {
+        let previousSize = hostWindow?.frame.size ?? bounds.size
+        hostWindow?.setFrame(frame, display: true, animate: animate)
+
+        if resetCalibration {
+            calibration.captureRect = defaultCaptureRect(in: CGRect(origin: .zero, size: frame.size))
+            calibration.isLocked = false
+            return
+        }
+
+        calibration.captureRect = scaledCaptureRect(
+            calibration.captureRect,
+            from: previousSize,
+            to: frame.size
+        )
     }
 
     private func toggleOverlayMode() {
@@ -379,7 +445,8 @@ private final class CaptureView: NSView {
 
     private func drawChrome() {
         let status = calibration.isLocked ? "Locked" : "Calibration"
-        let detail = calibration.isLocked ? "Click, drag, scroll, or pinch inside the frame" : "Drag frame, drag corner to resize, L locks, R resets, O attaches, T fades"
+        let follow = followsSimulatorWindow ? "follow on" : "follow off"
+        let detail = calibration.isLocked ? "Click, drag, scroll, or pinch inside the frame" : "Drag frame, drag corner to resize, L locks, R resets, O attaches, F follows, T fades (\(follow))"
         drawCenteredLabel("SimTouch Capture - \(status)", y: bounds.maxY - 38, fontSize: 18, weight: .semibold)
         drawCenteredLabel(detail, y: bounds.maxY - 64, fontSize: 12, weight: .regular)
     }
@@ -422,6 +489,21 @@ private final class CaptureView: NSView {
         let x = min(max(rect.minX, bounds.minX), bounds.maxX - width)
         let y = min(max(rect.minY, bounds.minY), bounds.maxY - height)
         return CGRect(x: x, y: y, width: width, height: height)
+    }
+
+    private func scaledCaptureRect(_ rect: CGRect, from oldSize: CGSize, to newSize: CGSize) -> CGRect {
+        guard oldSize.width > 0, oldSize.height > 0, newSize.width > 0, newSize.height > 0 else {
+            return constrainedCaptureRect(rect)
+        }
+
+        let scaleX = newSize.width / oldSize.width
+        let scaleY = newSize.height / oldSize.height
+        return constrainedCaptureRect(CGRect(
+            x: rect.minX * scaleX,
+            y: rect.minY * scaleY,
+            width: rect.width * scaleX,
+            height: rect.height * scaleY
+        ))
     }
 
     private func drawCenteredLabel(_ text: String, y: CGFloat, fontSize: CGFloat, weight: NSFont.Weight) {
@@ -506,5 +588,14 @@ private enum SimulatorWindowLocator {
             width: bounds.width,
             height: bounds.height
         )
+    }
+}
+
+private extension CGRect {
+    func isNearlyEqual(to other: CGRect, tolerance: CGFloat = 1) -> Bool {
+        abs(minX - other.minX) <= tolerance &&
+            abs(minY - other.minY) <= tolerance &&
+            abs(width - other.width) <= tolerance &&
+            abs(height - other.height) <= tolerance
     }
 }
