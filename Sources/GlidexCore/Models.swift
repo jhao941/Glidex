@@ -32,3 +32,8 @@ public struct BootedSimulatorRecord {
     public let dataPath: String?
     public let source: String
 }
+
+struct ScreenMetrics {
+    let pointSize: CGSize
+    let scale: Double
+}

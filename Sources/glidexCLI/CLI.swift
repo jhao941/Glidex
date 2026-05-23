@@ -34,6 +34,12 @@ struct CLI {
             let to = try parser.point(for: "--to")
             let duration = try parser.double(for: "--duration", defaultValue: 0.5)
             try injector.drag(from: from, to: to, duration: duration)
+        case "live-drag":
+            let parser = ArgumentCursor(Array(arguments.dropFirst(2)))
+            let from = try parser.point(for: "--from")
+            let to = try parser.point(for: "--to")
+            let duration = try parser.double(for: "--duration", defaultValue: 0.5)
+            try await runLiveDrag(injector: injector, from: from, to: to, duration: duration)
         case "pinch":
             let parser = ArgumentCursor(Array(arguments.dropFirst(2)))
             let center = try parser.point(for: "--center")
@@ -56,6 +62,23 @@ struct CLI {
         return CGPoint(x: x, y: y)
     }
 
+    private func runLiveDrag(injector: SimulatorInjector, from: CGPoint, to: CGPoint, duration: TimeInterval) async throws {
+        let session = try injector.makeLiveTouchSession()
+        let distance = hypot(to.x - from.x, to.y - from.y)
+        let steps = max(1, Int(distance / 10))
+        let dx = (to.x - from.x) / CGFloat(steps)
+        let dy = (to.y - from.y) / CGFloat(steps)
+        let stepDelay = duration / Double(steps + 1)
+
+        session.begin(at: from)
+        for index in 1...steps {
+            session.update(to: CGPoint(x: from.x + dx * CGFloat(index), y: from.y + dy * CGFloat(index)))
+            try await Task.sleep(nanoseconds: UInt64(stepDelay * 1_000_000_000))
+        }
+        session.end(at: to)
+        session.waitUntilIdle()
+    }
+
     static let usage = """
     Usage:
       glidex list
@@ -64,6 +87,7 @@ struct CLI {
       glidex tap --x 120 --y 300
       glidex digitizer-tap --x 120 --y 300
       glidex drag --from 120,300 --to 120,700 --duration 0.5
+      glidex live-drag --from 120,300 --to 120,700 --duration 0.5
       glidex pinch --center 200,400 --scale 1.2 --duration 0.5
     """
 }

@@ -4,11 +4,6 @@ import Dispatch
 import Foundation
 
 final class IndigoHIDBackend {
-    private struct ScreenMetrics {
-        let pointSize: CGSize
-        let scale: Double
-    }
-
     private struct DeviceUnitPoint {
         var x: CGFloat
         var y: CGFloat
@@ -114,6 +109,18 @@ final class IndigoHIDBackend {
         logger.info("attempting pinch backend=indigo-two-finger-touch simulator=\(simulator.udid)")
         logger.info("touch_lifecycle=two-finger-down,interpolated-down+delay,final-repeat-down,up center=(\(center.x), \(center.y)) scale=\(scale) duration=\(duration)")
         try execute(GestureSynthesizer.pinch(center: center, scale: scale, duration: duration), metrics: metrics, hidClient: hidClient)
+    }
+
+    func makeLiveTouchSession(on simulator: BootedSimulatorRecord, simDevice: AnyObject) throws -> LiveTouchSession {
+        let hidClient = try SimulatorHIDClient.make(simDevice: simDevice, simulatorKit: simulatorKit, logger: logger)
+        let metrics = resolveScreenMetrics(for: simDevice, fallback: simulator)
+        logger.info("created live touch session simulator=\(simulator.udid) screen_metrics points=\(Int(metrics.pointSize.width))x\(Int(metrics.pointSize.height)) scale=\(metrics.scale)")
+        return LiveTouchSession(
+            hidClient: hidClient,
+            metrics: metrics,
+            logger: logger,
+            dumpsHIDMessages: dumpsHIDMessages
+        )
     }
 
     private func makeDigitizerView(simDevice: AnyObject, metrics: ScreenMetrics) throws -> AnyObject {

@@ -58,6 +58,12 @@ public final class SimulatorInjector: @unchecked Sendable {
         try backend.attemptPinch(on: simulator, simDevice: simDevice, center: center, scale: scale, duration: duration)
     }
 
+    public func makeLiveTouchSession() throws -> LiveTouchSession {
+        let simulator = try selectTarget()
+        let simDevice = try resolver.resolveSimDevice(udid: simulator.udid)
+        return try backend.makeLiveTouchSession(on: simulator, simDevice: simDevice)
+    }
+
     private func selectTarget() throws -> BootedSimulatorRecord {
         let devices = try listBootedSimulators()
         guard let first = devices.first else {
