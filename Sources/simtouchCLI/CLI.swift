@@ -1,4 +1,5 @@
 import Foundation
+import SimTouchCore
 
 struct CLI {
     private let arguments: [String]

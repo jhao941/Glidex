@@ -2,11 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "simtouch",
+    name: "SimTouch",
     platforms: [
         .macOS(.v14),
     ],
     products: [
+        .library(name: "SimTouchCore", targets: ["SimTouchCore"]),
         .executable(name: "simtouch", targets: ["simtouch"]),
     ],
     targets: [
@@ -14,14 +15,19 @@ let package = Package(
             name: "CSimTouchShim",
             publicHeadersPath: "include"
         ),
-        .executableTarget(
-            name: "simtouch",
+        .target(
+            name: "SimTouchCore",
             dependencies: ["CSimTouchShim"],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("CoreGraphics"),
                 .linkedFramework("Foundation"),
             ]
+        ),
+        .executableTarget(
+            name: "simtouch",
+            dependencies: ["SimTouchCore"],
+            path: "Sources/simtouchCLI"
         ),
     ]
 )

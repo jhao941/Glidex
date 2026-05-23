@@ -1,13 +1,13 @@
 import Foundation
 
-final class SimulatorInjector {
+public final class SimulatorInjector {
     private let logger: Logger
     private let loader: PrivateFrameworkLoader
     private let resolver: BootedSimulatorResolver
     private let simulatorKit: SimulatorKitLoader
     private let backend: IndigoHIDBackend
 
-    init(logger: Logger) throws {
+    public init(logger: Logger) throws {
         self.logger = logger
         self.loader = PrivateFrameworkLoader(logger: logger)
         self.resolver = BootedSimulatorResolver(logger: logger, loader: loader)
@@ -15,14 +15,14 @@ final class SimulatorInjector {
         self.backend = IndigoHIDBackend(logger: logger, simulatorKit: simulatorKit)
     }
 
-    func probe() throws {
+    public func probe() throws {
         logger.info("probing private frameworks")
         _ = try listBootedSimulators()
         try simulatorKit.probe()
         try backend.probeFactories()
     }
 
-    func swiftProbe() throws {
+    public func swiftProbe() throws {
         try simulatorKit.load()
         guard let framework = simulatorKit.framework else {
             throw SimTouchError.frameworkLoadFailed("SimulatorKit framework not loaded")
@@ -30,29 +30,29 @@ final class SimulatorInjector {
         try SwiftMetadataProbe.run(framework: framework, logger: logger)
     }
 
-    func listBootedSimulators() throws -> [BootedSimulatorRecord] {
+    public func listBootedSimulators() throws -> [BootedSimulatorRecord] {
         try resolver.listBootedSimulators()
     }
 
-    func tap(at point: CGPoint) throws {
+    public func tap(at point: CGPoint) throws {
         let simulator = try selectTarget()
         let simDevice = try resolver.resolveSimDevice(udid: simulator.udid)
         try backend.attemptTap(on: simulator, simDevice: simDevice, point: point)
     }
 
-    func digitizerTap(at point: CGPoint) throws {
+    public func digitizerTap(at point: CGPoint) throws {
         let simulator = try selectTarget()
         let simDevice = try resolver.resolveSimDevice(udid: simulator.udid)
         try backend.attemptDigitizerTap(on: simulator, simDevice: simDevice, point: point)
     }
 
-    func drag(from: CGPoint, to: CGPoint, duration: TimeInterval) throws {
+    public func drag(from: CGPoint, to: CGPoint, duration: TimeInterval) throws {
         let simulator = try selectTarget()
         let simDevice = try resolver.resolveSimDevice(udid: simulator.udid)
         try backend.attemptDrag(on: simulator, simDevice: simDevice, from: from, to: to, duration: duration)
     }
 
-    func pinch(center: CGPoint, scale: Double, duration: TimeInterval) throws {
+    public func pinch(center: CGPoint, scale: Double, duration: TimeInterval) throws {
         let simulator = try selectTarget()
         let simDevice = try resolver.resolveSimDevice(udid: simulator.udid)
         try backend.attemptPinch(on: simulator, simDevice: simDevice, center: center, scale: scale, duration: duration)

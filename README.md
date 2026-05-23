@@ -1,6 +1,6 @@
 # SimTouch
 
-`simtouch` is a minimal macOS CLI proof of concept for driving a booted iPhone Simulator through dynamically loaded private frameworks. The longer-term direction is a macOS overlay app that lets a Mac trackpad operate an Xcode iOS Simulator in a style similar to iPhone Mirroring.
+`SimTouchCore` is a reusable Swift library and `simtouch` is a minimal macOS CLI proof of concept for driving a booted iPhone Simulator through dynamically loaded private frameworks. The longer-term direction is a macOS overlay app that lets a Mac trackpad operate an Xcode iOS Simulator in a style similar to iPhone Mirroring.
 
 Current scope:
 
@@ -28,22 +28,24 @@ Current non-goals:
     │   ├── IndigoMessageBuilder.h
     │   ├── IndigoMessageBuilder.m
     │   └── include
-    └── simtouch
+    ├── SimTouchCore
+    │   ├── SimulatorInjector.swift
+    │   ├── IndigoHIDBackend.swift
+    │   ├── TouchMessageBuilder.swift
+    │   └── ...
+    └── simtouchCLI
         ├── CLI.swift
-        ├── SimulatorInjector.swift
-        ├── IndigoHIDBackend.swift
-        ├── TouchMessageBuilder.swift
-        └── ...
+        └── main.swift
 ```
 
 Key files:
 
-- `Sources/simtouch/BootedSimulatorResolver.swift`: booted simulator discovery, `simctl` fallback, and CoreSimulator probing
-- `Sources/simtouch/SimulatorKitLoader.swift`: dynamic loading and Indigo symbol resolution
-- `Sources/simtouch/IndigoHIDBackend.swift`: current injection backend
-- `Sources/simtouch/SimulatorInjector.swift`: command orchestration
-- `Sources/simtouch/GestureSynthesizer.swift`: higher-level gesture sequencing
-- `Sources/simtouch/TouchMessageBuilder.swift`: Indigo digitizer message construction
+- `Sources/SimTouchCore/BootedSimulatorResolver.swift`: booted simulator discovery, `simctl` fallback, and CoreSimulator probing
+- `Sources/SimTouchCore/SimulatorKitLoader.swift`: dynamic loading and Indigo symbol resolution
+- `Sources/SimTouchCore/IndigoHIDBackend.swift`: current injection backend
+- `Sources/SimTouchCore/SimulatorInjector.swift`: command orchestration
+- `Sources/SimTouchCore/GestureSynthesizer.swift`: higher-level gesture sequencing
+- `Sources/SimTouchCore/TouchMessageBuilder.swift`: Indigo digitizer message construction
 - `Sources/CSimTouchShim/*`: tiny C shim for Objective-C runtime method enumeration and message construction helpers
 
 ## Build

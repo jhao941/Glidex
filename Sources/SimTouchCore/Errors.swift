@@ -1,6 +1,6 @@
 import Foundation
 
-enum SimTouchError: Error, CustomStringConvertible {
+public enum SimTouchError: Error, CustomStringConvertible {
     case usage(String)
     case frameworkLoadFailed(String)
     case symbolMissing(String)
@@ -10,7 +10,7 @@ enum SimTouchError: Error, CustomStringConvertible {
     case simulatorNotFound(String)
     case unsupported(String)
 
-    var description: String {
+    public var description: String {
         switch self {
         case let .usage(message),
              let .frameworkLoadFailed(message),

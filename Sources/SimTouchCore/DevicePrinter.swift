@@ -1,7 +1,7 @@
 import Foundation
 
-enum DevicePrinter {
-    static func printDevices(_ devices: [BootedSimulatorRecord], logger: Logger) {
+public enum DevicePrinter {
+    public static func printDevices(_ devices: [BootedSimulatorRecord], logger: Logger) {
         if devices.isEmpty {
             logger.warn("no booted simulators found")
             return
