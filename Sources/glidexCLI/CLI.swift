@@ -50,6 +50,15 @@ struct CLI {
             try injector.probe()
         case "swift-probe":
             try injector.swiftProbe()
+        case "multitouch-probe":
+            let parser = ArgumentCursor(Array(arguments.dropFirst(2)))
+            let duration = try parser.double(for: "--duration", defaultValue: 10)
+            let mode = try Int32(parser.int(for: "--mode", defaultValue: 0))
+            let sourceValue = try parser.string(for: "--source", defaultValue: "default")
+            guard let source = MultitouchProbeSource(rawValue: sourceValue) else {
+                throw GlidexError.usage("expected --source to be list, default, or both")
+            }
+            try injector.multitouchProbe(duration: duration, mode: mode, source: source)
         default:
             throw GlidexError.usage("unknown command '\(command)'\n\n\(Self.usage)")
         }
@@ -84,6 +93,7 @@ struct CLI {
       glidex list
       glidex probe
       glidex swift-probe
+      glidex multitouch-probe --duration 10 --source default --mode 0
       glidex tap --x 120 --y 300
       glidex digitizer-tap --x 120 --y 300
       glidex drag --from 120,300 --to 120,700 --duration 0.5
@@ -114,6 +124,26 @@ struct ArgumentCursor {
             return defaultValue
         }
         throw GlidexError.usage("missing numeric value for \(flag)")
+    }
+
+    func int(for flag: String, defaultValue: Int? = nil) throws -> Int {
+        if let index = args.firstIndex(of: flag), index + 1 < args.count, let value = Int(args[index + 1]) {
+            return value
+        }
+        if let defaultValue {
+            return defaultValue
+        }
+        throw GlidexError.usage("missing integer value for \(flag)")
+    }
+
+    func string(for flag: String, defaultValue: String? = nil) throws -> String {
+        if let index = args.firstIndex(of: flag), index + 1 < args.count {
+            return args[index + 1]
+        }
+        if let defaultValue {
+            return defaultValue
+        }
+        throw GlidexError.usage("missing value for \(flag)")
     }
 
     func point(for flag: String) throws -> CGPoint {

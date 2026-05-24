@@ -7,6 +7,7 @@ public final class LiveTwoFingerTouchSession: @unchecked Sendable {
     private let metrics: ScreenMetrics
     private let logger: Logger
     private let dumpsHIDMessages: Bool
+    private let logsTouchEvents: Bool
     private let queue = DispatchQueue(label: "glidex.live-two-finger-touch-session")
 
     private var isActive = false
@@ -17,6 +18,7 @@ public final class LiveTwoFingerTouchSession: @unchecked Sendable {
         self.metrics = metrics
         self.logger = logger
         self.dumpsHIDMessages = dumpsHIDMessages
+        self.logsTouchEvents = ProcessInfo.processInfo.environment["GLIDEX_LOG_TOUCH_EVENTS"] == "1"
     }
 
     public func begin(finger1: CGPoint, finger2: CGPoint) {
@@ -86,7 +88,7 @@ public final class LiveTwoFingerTouchSession: @unchecked Sendable {
                 screenPointSize: metrics.pointSize,
                 direction: direction
             )
-            logger.info("\(description) direction=\(direction) finger1=(\(fingers.0.x), \(fingers.0.y)) finger2=(\(fingers.1.x), \(fingers.1.y))")
+            logTouchEventIfEnabled(description: description, direction: direction, fingers: fingers)
             logMessageIfEnabled(message)
             hidClient.send(message: message)
         } catch {
@@ -104,5 +106,10 @@ public final class LiveTwoFingerTouchSession: @unchecked Sendable {
     private func logMessageIfEnabled(_ message: UnsafeMutableRawPointer) {
         guard dumpsHIDMessages else { return }
         logger.info("message \(TouchMessageBuilder.describe(message))")
+    }
+
+    private func logTouchEventIfEnabled(description: String, direction: TouchDirection, fingers: (CGPoint, CGPoint)) {
+        guard logsTouchEvents else { return }
+        logger.info("\(description) direction=\(direction) finger1=(\(fingers.0.x), \(fingers.0.y)) finger2=(\(fingers.1.x), \(fingers.1.y))")
     }
 }

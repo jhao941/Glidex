@@ -7,6 +7,7 @@ public final class LiveTouchSession: @unchecked Sendable {
     private let metrics: ScreenMetrics
     private let logger: Logger
     private let dumpsHIDMessages: Bool
+    private let logsTouchEvents: Bool
     private let queue = DispatchQueue(label: "glidex.live-touch-session")
 
     private var isActive = false
@@ -17,6 +18,7 @@ public final class LiveTouchSession: @unchecked Sendable {
         self.metrics = metrics
         self.logger = logger
         self.dumpsHIDMessages = dumpsHIDMessages
+        self.logsTouchEvents = ProcessInfo.processInfo.environment["GLIDEX_LOG_TOUCH_EVENTS"] == "1"
     }
 
     public func begin(at point: CGPoint) {
@@ -80,7 +82,7 @@ public final class LiveTouchSession: @unchecked Sendable {
                 screenPointSize: metrics.pointSize,
                 direction: direction
             )
-            logger.info("\(description) direction=\(direction) point=(\(point.x), \(point.y))")
+            logTouchEventIfEnabled(description: description, direction: direction, point: point)
             logMessageIfEnabled(message)
             hidClient.send(message: message)
         } catch {
@@ -98,5 +100,10 @@ public final class LiveTouchSession: @unchecked Sendable {
     private func logMessageIfEnabled(_ message: UnsafeMutableRawPointer) {
         guard dumpsHIDMessages else { return }
         logger.info("message \(TouchMessageBuilder.describe(message))")
+    }
+
+    private func logTouchEventIfEnabled(description: String, direction: TouchDirection, point: CGPoint) {
+        guard logsTouchEvents else { return }
+        logger.info("\(description) direction=\(direction) point=(\(point.x), \(point.y))")
     }
 }

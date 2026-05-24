@@ -30,6 +30,11 @@ public final class SimulatorInjector: @unchecked Sendable {
         try SwiftMetadataProbe.run(framework: framework, logger: logger)
     }
 
+    public func multitouchProbe(duration: TimeInterval, mode: Int32, source: MultitouchProbeSource) throws {
+        let probe = MultitouchSupportProbe(logger: logger, loader: loader)
+        try probe.run(options: MultitouchProbeOptions(duration: duration, mode: mode, source: source))
+    }
+
     public func listBootedSimulators() throws -> [BootedSimulatorRecord] {
         try resolver.listBootedSimulators()
     }

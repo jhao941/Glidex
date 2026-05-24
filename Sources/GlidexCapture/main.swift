@@ -55,6 +55,23 @@ private final class CaptureView: NSView {
         case vertical
     }
 
+    private enum RawTouchInjectionMode {
+        case single
+        case twoFingerScroll
+        case twoFingerPinch
+    }
+
+    private struct RawTwoFingerGestureState {
+        var contactIDs: (Int32, Int32)
+        var initialTimestamp: Double
+        var initialCentroid: CGPoint
+        var initialDistance: CGFloat
+        var initialSimulatorPoint: CGPoint
+        var initialPinchRadius: CGFloat
+        var currentPinchRadius: CGFloat
+        var intent: RawTouchInjectionMode?
+    }
+
     private let logger: Logger
     private let injector: SimulatorInjector
     private let injectionQueue = DispatchQueue(label: "glidex.capture.injection", qos: .userInitiated)
@@ -89,6 +106,17 @@ private final class CaptureView: NSView {
     private var liveScrollFlingTimer: Timer?
     private var liveScrollFlingVelocity = CGPoint.zero
     private var liveScrollFlingFramesRemaining = 0
+    private var isRawTouchEnabled = false
+    private var rawTouchStream: MultitouchSupportRawTouchStream?
+    private var rawTouchMode: RawTouchInjectionMode?
+    private var rawSingleFingerSession: LiveTouchSession?
+    private var rawSingleFingerPoint: CGPoint?
+    private var rawReusableSingleFingerSession: LiveTouchSession?
+    private var rawTwoFingerSession: LiveTwoFingerTouchSession?
+    private var rawTwoFingerPoints: (CGPoint, CGPoint)?
+    private var rawReusableTwoFingerSession: LiveTwoFingerTouchSession?
+    private var rawTwoFingerGesture: RawTwoFingerGestureState?
+    private var rawTwoFingerScrollPoint: CGPoint?
 
     init(logger: Logger) {
         self.logger = logger
@@ -103,6 +131,10 @@ private final class CaptureView: NSView {
         wantsLayer = true
         layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         setupGestures()
+    }
+
+    deinit {
+        rawTouchStream?.stop()
     }
 
     required init?(coder: NSCoder) {
@@ -138,6 +170,9 @@ private final class CaptureView: NSView {
         switch event.charactersIgnoringModifiers?.lowercased() {
         case "l":
             calibration.isLocked.toggle()
+            if !calibration.isLocked {
+                stopRawTouchBackend()
+            }
             logger.info("capture calibration \(calibration.isLocked ? "locked" : "unlocked") rect=\(format(calibration.captureRect))")
             needsDisplay = true
         case "o":
@@ -146,6 +181,8 @@ private final class CaptureView: NSView {
             toggleSimulatorFollow()
         case "t":
             toggleOverlayMode()
+        case "m":
+            toggleRawTouchBackend()
         case "r":
             calibration.captureRect = defaultCaptureRect(in: bounds)
             calibration.isLocked = false
@@ -154,6 +191,347 @@ private final class CaptureView: NSView {
         default:
             super.keyDown(with: event)
         }
+    }
+
+    private func toggleRawTouchBackend() {
+        if isRawTouchEnabled {
+            stopRawTouchBackend()
+        } else {
+            startRawTouchBackend()
+        }
+        needsDisplay = true
+    }
+
+    private func startRawTouchBackend() {
+        guard !isRawTouchEnabled else { return }
+        endLiveScroll()
+        endLivePinch()
+        endLiveDrag(at: liveDragPoint)
+
+        do {
+            rawReusableSingleFingerSession = try injector.makeLiveTouchSession()
+            rawReusableTwoFingerSession = try injector.makeLiveTwoFingerTouchSession()
+            let stream = MultitouchSupportRawTouchStream(logger: logger) { [weak self] frame in
+                DispatchQueue.main.async {
+                    self?.handleRawTouchFrame(frame)
+                }
+            }
+            try stream.start(source: .default, mode: 0)
+            rawTouchStream = stream
+            isRawTouchEnabled = true
+            logger.info("capture raw touch backend enabled")
+        } catch {
+            logger.error("capture raw touch backend failed to start: \(error)")
+            rawReusableSingleFingerSession = nil
+            rawReusableTwoFingerSession = nil
+        }
+    }
+
+    private func stopRawTouchBackend() {
+        guard isRawTouchEnabled else { return }
+        endRawTouchInjection()
+        rawTouchStream?.stop()
+        rawTouchStream = nil
+        rawReusableSingleFingerSession = nil
+        rawReusableTwoFingerSession = nil
+        isRawTouchEnabled = false
+        logger.info("capture raw touch backend disabled")
+    }
+
+    private func handleRawTouchFrame(_ frame: RawTouchFrame) {
+        guard isRawTouchEnabled, calibration.isLocked else {
+            endRawTouchInjection()
+            return
+        }
+
+        let contacts = frame.contacts
+            .sorted { $0.identifier < $1.identifier }
+
+        if shouldEndRawTrackedTouch(from: contacts) {
+            endRawTouchInjection()
+            return
+        }
+
+        let activeContacts = contacts
+            .filter(\.isActive)
+
+        if activeContacts.count >= 2 {
+            updateRawTwoFingerGesture(contacts: (activeContacts[0], activeContacts[1]), timestamp: frame.timestamp)
+        } else if let contact = activeContacts.first {
+            if rawTouchMode != .twoFingerScroll && rawTouchMode != .twoFingerPinch {
+                resetRawTwoFingerGesture()
+            }
+            ignoreRawSingleFingerTouch(contact)
+        } else {
+            if rawTouchMode != .twoFingerScroll && rawTouchMode != .twoFingerPinch {
+                endRawTouchInjection()
+            }
+        }
+    }
+
+    private func shouldEndRawTrackedTouch(from contacts: [RawTouchContact]) -> Bool {
+        guard rawTouchMode == .twoFingerScroll || rawTouchMode == .twoFingerPinch,
+              let gesture = rawTwoFingerGesture else {
+            return false
+        }
+
+        return contacts.contains { contact in
+            (contact.identifier == gesture.contactIDs.0 || contact.identifier == gesture.contactIDs.1)
+                && !contact.isActive
+        }
+    }
+
+    private func ignoreRawSingleFingerTouch(_ contact: RawTouchContact) {
+        endRawSingleFingerTouchIfModeIsSingle()
+    }
+
+    private func updateRawSingleFingerTouch(to point: CGPoint) {
+        if rawTouchMode == .twoFingerPinch {
+            endRawTwoFingerTouch()
+        } else if rawTouchMode == .twoFingerScroll {
+            endRawSingleFingerTouch()
+        }
+
+        if rawSingleFingerSession == nil {
+            do {
+                let session = try injector.makeLiveTouchSession()
+                rawSingleFingerSession = session
+                rawSingleFingerPoint = point
+                rawTouchMode = .single
+                logger.info("capture raw single touch began point=\(format(point))")
+                session.begin(at: point)
+            } catch {
+                logger.error("capture raw single touch failed to begin: \(error)")
+            }
+            return
+        }
+
+        guard let session = rawSingleFingerSession else { return }
+        rawSingleFingerPoint = point
+        session.update(to: point)
+    }
+
+    private func updateRawTwoFingerGesture(contacts: (RawTouchContact, RawTouchContact), timestamp: Double) {
+        endRawSingleFingerTouchIfModeIsSingle()
+
+        let first = contacts.0
+        let second = contacts.1
+        let contactIDs = (first.identifier, second.identifier)
+        let centroid = CGPoint(
+            x: (first.normalizedPosition.x + second.normalizedPosition.x) / 2,
+            y: (first.normalizedPosition.y + second.normalizedPosition.y) / 2
+        )
+        let distance = first.normalizedPosition.distance(to: second.normalizedPosition)
+
+        if rawTwoFingerGesture?.contactIDs.0 != contactIDs.0 || rawTwoFingerGesture?.contactIDs.1 != contactIDs.1 {
+            resetRawTwoFingerGesture()
+            rawTwoFingerGesture = RawTwoFingerGestureState(
+                contactIDs: contactIDs,
+                initialTimestamp: timestamp,
+                initialCentroid: centroid,
+                initialDistance: distance,
+                initialSimulatorPoint: simulatorPoint(fromNormalizedRawTouch: centroid),
+                initialPinchRadius: rawInitialPinchRadius(first: first, second: second),
+                currentPinchRadius: rawInitialPinchRadius(first: first, second: second),
+                intent: nil
+            )
+        }
+
+        guard var gesture = rawTwoFingerGesture else { return }
+        if gesture.intent == nil {
+            gesture.intent = resolvedRawTwoFingerIntent(gesture: gesture, centroid: centroid, distance: distance, timestamp: timestamp)
+            rawTwoFingerGesture = gesture
+            guard gesture.intent != nil else { return }
+        }
+
+        switch gesture.intent {
+        case .twoFingerPinch:
+            let fingers = rawPinchFingers(gesture: &gesture, distance: distance)
+            rawTwoFingerGesture = gesture
+            let finger1 = fingers.0
+            let finger2 = fingers.1
+            updateRawTwoFingerPinch(finger1: finger1, finger2: finger2)
+        case .twoFingerScroll:
+            let point = rawTwoFingerScrollPoint(
+                initialPoint: gesture.initialSimulatorPoint,
+                initialCentroid: gesture.initialCentroid,
+                centroid: centroid
+            )
+            updateRawTwoFingerScroll(to: point)
+        default:
+            break
+        }
+    }
+
+    private func resolvedRawTwoFingerIntent(
+        gesture: RawTwoFingerGestureState,
+        centroid: CGPoint,
+        distance: CGFloat,
+        timestamp: Double
+    ) -> RawTouchInjectionMode? {
+        let elapsed = timestamp - gesture.initialTimestamp
+        let centroidDelta = gesture.initialCentroid.distance(to: centroid)
+        let distanceDelta = abs(distance - gesture.initialDistance)
+        let pinchThreshold: CGFloat = 0.010
+        let scrollThreshold: CGFloat = 0.010
+
+        if distanceDelta >= pinchThreshold && distanceDelta > centroidDelta * 1.15 {
+            logger.info("capture raw two-finger intent=pinch distance_delta=\(format(distanceDelta)) centroid_delta=\(format(centroidDelta))")
+            return .twoFingerPinch
+        }
+
+        if distanceDelta >= 0.018 {
+            logger.info("capture raw two-finger intent=pinch distance_delta=\(format(distanceDelta)) centroid_delta=\(format(centroidDelta))")
+            return .twoFingerPinch
+        }
+
+        if centroidDelta >= scrollThreshold && distanceDelta < centroidDelta * 1.2 {
+            logger.info("capture raw two-finger intent=scroll distance_delta=\(format(distanceDelta)) centroid_delta=\(format(centroidDelta))")
+            return .twoFingerScroll
+        }
+
+        if elapsed >= 0.070 && centroidDelta >= 0.006 {
+            logger.info("capture raw two-finger intent=scroll distance_delta=\(format(distanceDelta)) centroid_delta=\(format(centroidDelta))")
+            return .twoFingerScroll
+        }
+
+        return nil
+    }
+
+    private func updateRawTwoFingerScroll(to point: CGPoint) {
+        if rawTouchMode == .twoFingerPinch {
+            endRawTwoFingerTouch()
+        }
+
+        if rawSingleFingerSession == nil {
+            let session = rawReusableSingleFingerSession
+            rawSingleFingerSession = session
+            rawSingleFingerPoint = point
+            rawTwoFingerScrollPoint = point
+            rawTouchMode = .twoFingerScroll
+            logger.info("capture raw two-finger scroll began point=\(format(point))")
+            session?.begin(at: point)
+            return
+        }
+
+        guard let session = rawSingleFingerSession else { return }
+        rawSingleFingerPoint = point
+        rawTwoFingerScrollPoint = point
+        session.update(to: point)
+    }
+
+    private func updateRawTwoFingerPinch(finger1: CGPoint, finger2: CGPoint) {
+        if rawTouchMode == .single {
+            endRawSingleFingerTouch()
+        } else if rawTouchMode == .twoFingerScroll {
+            endRawSingleFingerTouch()
+        }
+
+        if rawTwoFingerSession == nil {
+            let session = rawReusableTwoFingerSession
+            rawTwoFingerSession = session
+            rawTwoFingerPoints = (finger1, finger2)
+            rawTouchMode = .twoFingerPinch
+            logger.info("capture raw two-finger pinch began finger1=\(format(finger1)) finger2=\(format(finger2))")
+            session?.begin(finger1: finger1, finger2: finger2)
+            return
+        }
+
+        guard let session = rawTwoFingerSession else { return }
+        rawTwoFingerPoints = (finger1, finger2)
+        session.update(finger1: finger1, finger2: finger2)
+    }
+
+    private func endRawTouchInjection() {
+        endRawSingleFingerTouch()
+        endRawTwoFingerTouch()
+        resetRawTwoFingerGesture()
+        rawTouchMode = nil
+    }
+
+    private func endRawSingleFingerTouchIfModeIsSingle() {
+        guard rawTouchMode == .single else { return }
+        endRawSingleFingerTouch()
+    }
+
+    private func endRawSingleFingerTouch() {
+        guard let session = rawSingleFingerSession else { return }
+        logger.info("capture raw single touch ended point=\(rawSingleFingerPoint.map(format) ?? "nil")")
+        session.end(at: rawSingleFingerPoint)
+        rawSingleFingerSession = nil
+        rawSingleFingerPoint = nil
+        rawTwoFingerScrollPoint = nil
+        if rawTouchMode == .single || rawTouchMode == .twoFingerScroll {
+            rawTouchMode = nil
+        }
+    }
+
+    private func endRawTwoFingerTouch() {
+        guard let session = rawTwoFingerSession else { return }
+        logger.info("capture raw two-finger touch ended")
+        session.end(finger1: rawTwoFingerPoints?.0, finger2: rawTwoFingerPoints?.1)
+        rawTwoFingerSession = nil
+        rawTwoFingerPoints = nil
+        if rawTouchMode == .twoFingerPinch {
+            rawTouchMode = nil
+        }
+    }
+
+    private func simulatorPoint(fromRawTouch contact: RawTouchContact) -> CGPoint {
+        simulatorPoint(fromNormalizedRawTouch: contact.normalizedPosition)
+    }
+
+    private func simulatorPoint(fromNormalizedRawTouch point: CGPoint) -> CGPoint {
+        let x = min(max(point.x, 0), 1)
+        let y = min(max(point.y, 0), 1)
+        return calibration.clampedSimulatorPoint(CGPoint(
+            x: x * calibration.simulatorSize.width,
+            y: (1 - y) * calibration.simulatorSize.height
+        ))
+    }
+
+    private func rawTwoFingerScrollPoint(initialPoint: CGPoint, initialCentroid: CGPoint, centroid: CGPoint) -> CGPoint {
+        let gain: CGFloat = 1.35
+        let delta = CGPoint(
+            x: (centroid.x - initialCentroid.x) * calibration.simulatorSize.width * gain,
+            y: (initialCentroid.y - centroid.y) * calibration.simulatorSize.height * gain
+        )
+        return calibration.clampedSimulatorPoint(CGPoint(
+            x: initialPoint.x + delta.x,
+            y: initialPoint.y + delta.y
+        ))
+    }
+
+    private func rawInitialPinchRadius(first: RawTouchContact, second: RawTouchContact) -> CGFloat {
+        72
+    }
+
+    private func rawPinchFingers(gesture: inout RawTwoFingerGestureState, distance: CGFloat) -> (CGPoint, CGPoint) {
+        let distanceDelta = distance - gesture.initialDistance
+        let radiusGain = min(calibration.simulatorSize.width, calibration.simulatorSize.height) * 0.45
+        let targetRadius = clampedRawPinchRadius(gesture.initialPinchRadius + distanceDelta * radiusGain)
+        let filteredTarget = gesture.currentPinchRadius * 0.82 + targetRadius * 0.18
+        let maximumStep: CGFloat = 2.5
+        let step = min(max(filteredTarget - gesture.currentPinchRadius, -maximumStep), maximumStep)
+        let filteredRadius = clampedRawPinchRadius(gesture.currentPinchRadius + step)
+        gesture.currentPinchRadius = filteredRadius
+        return (
+            calibration.clampedSimulatorPoint(CGPoint(x: gesture.initialSimulatorPoint.x - filteredRadius, y: gesture.initialSimulatorPoint.y)),
+            calibration.clampedSimulatorPoint(CGPoint(x: gesture.initialSimulatorPoint.x + filteredRadius, y: gesture.initialSimulatorPoint.y))
+        )
+    }
+
+    private func clampedRawPinchRadius(_ radius: CGFloat) -> CGFloat {
+        min(max(radius, 32), min(calibration.simulatorSize.width, calibration.simulatorSize.height) * 0.34)
+    }
+
+    private func resetRawTwoFingerGesture() {
+        rawTwoFingerGesture = nil
+        rawTwoFingerScrollPoint = nil
+    }
+
+    private func format(_ value: CGFloat) -> String {
+        String(format: "%.4f", Double(value))
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -284,6 +662,11 @@ private final class CaptureView: NSView {
     }
 
     override func scrollWheel(with event: NSEvent) {
+        guard !isRawTouchEnabled else {
+            endLiveScroll()
+            return
+        }
+
         guard calibration.isLocked else {
             endLiveScroll()
             super.scrollWheel(with: event)
@@ -704,6 +1087,7 @@ private final class CaptureView: NSView {
     }
 
     @objc private func handleMagnification(_ gesture: NSMagnificationGestureRecognizer) {
+        guard !isRawTouchEnabled else { return }
         guard calibration.isLocked else { return }
         let localPoint = gesture.location(in: self)
 
@@ -870,7 +1254,8 @@ private final class CaptureView: NSView {
     private func drawChrome() {
         let status = calibration.isLocked ? "Locked" : "Calibration"
         let follow = followsSimulatorWindow ? "follow on" : "follow off"
-        let detail = calibration.isLocked ? "Click, drag, scroll, or pinch inside the frame" : "Drag frame, drag corner to resize, L locks, R resets, O attaches, F follows, T fades (\(follow))"
+        let raw = isRawTouchEnabled ? "raw on" : "raw off"
+        let detail = calibration.isLocked ? "Click, drag, scroll, pinch, or press M for raw touch (\(raw))" : "Drag frame, drag corner to resize, L locks, R resets, O attaches, F follows, T fades, M raw (\(follow), \(raw))"
         drawCenteredLabel("Glidex Capture - \(status)", y: bounds.maxY - 38, fontSize: 18, weight: .semibold)
         drawCenteredLabel(detail, y: bounds.maxY - 64, fontSize: 12, weight: .regular)
     }
