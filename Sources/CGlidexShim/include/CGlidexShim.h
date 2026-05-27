@@ -32,6 +32,7 @@ void st_invokeVoidPointerBoolPointerBlockCatching(STObjCObject target, SEL selec
 void *st_create_indigo_touch_message(CGPoint point, CGSize screenPointSize, int direction, size_t *messageSizeOut, const char **errorOut);
 void *st_create_indigo_two_finger_touch_message(CGPoint finger1, CGPoint finger2, CGSize screenPointSize, int direction, size_t *messageSizeOut, const char **errorOut);
 const char *st_send_hid_message_sync(STObjCObject target, void *message, BOOL freeWhenDone, double timeoutSeconds);
+const char *st_send_hid_message_async(STObjCObject target, void *message, BOOL freeWhenDone);
 const char *st_copy_indigo_message_description(void *message);
 void st_call_swift_digitizer_touch(void *function, STObjCObject digitizerView, const void *touchEvent, STObjCObject hidClient);
 void st_call_swift_display_connect(void *function, STObjCObject displayView, STObjCObject screen, unsigned long inputs);

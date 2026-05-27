@@ -90,7 +90,7 @@ public final class LiveTwoFingerTouchSession: @unchecked Sendable {
             )
             logTouchEventIfEnabled(description: description, direction: direction, fingers: fingers)
             logMessageIfEnabled(message)
-            hidClient.send(message: message)
+            hidClient.send(message: message, waitForCompletion: false)
         } catch {
             logger.error("\(description) failed: \(error)")
         }

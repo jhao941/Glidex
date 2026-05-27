@@ -127,6 +127,29 @@ const char *st_send_hid_message_sync(STObjCObject target, void *message, BOOL fr
     return NULL;
 }
 
+const char *st_send_hid_message_async(STObjCObject target, void *message, BOOL freeWhenDone) {
+    id object = (__bridge id)target;
+    SEL selector = NSSelectorFromString(@"sendWithMessage:freeWhenDone:completionQueue:completion:");
+    if (![object respondsToSelector:selector]) {
+        return strdup("target does not respond to sendWithMessage:freeWhenDone:completionQueue:completion:");
+    }
+
+    typedef void (^CompletionBlock)(NSError *);
+    typedef void (*SendFn)(id, SEL, void *, BOOL, dispatch_queue_t, CompletionBlock);
+    SendFn fn = (SendFn)objc_msgSend;
+    CompletionBlock completion = ^(NSError *error) {
+        (void)error;
+    };
+
+    @try {
+        fn(object, selector, message, freeWhenDone, dispatch_get_main_queue(), completion);
+    } @catch (NSException *exception) {
+        return strdup(exception.reason.UTF8String ?: "");
+    }
+
+    return NULL;
+}
+
 void st_call_swift_digitizer_touch(void *function, STObjCObject digitizerView, const void *touchEvent, STObjCObject hidClient) {
 #if defined(__arm64__)
     register void *x0 __asm__("x0") = digitizerView;

@@ -72,6 +72,11 @@ private final class CaptureView: NSView {
         var intent: RawTouchInjectionMode?
     }
 
+    private struct MouseEventSignature: Equatable {
+        var type: NSEvent.EventType
+        var timestamp: TimeInterval
+    }
+
     private let logger: Logger
     private let injector: SimulatorInjector
     private let injectionQueue = DispatchQueue(label: "glidex.capture.injection", qos: .userInitiated)
@@ -117,6 +122,8 @@ private final class CaptureView: NSView {
     private var rawReusableTwoFingerSession: LiveTwoFingerTouchSession?
     private var rawTwoFingerGesture: RawTwoFingerGestureState?
     private var rawTwoFingerScrollPoint: CGPoint?
+    private nonisolated(unsafe) var localMouseEventMonitor: Any?
+    private var locallyHandledMouseEvents: [MouseEventSignature] = []
 
     init(logger: Logger) {
         self.logger = logger
@@ -131,9 +138,13 @@ private final class CaptureView: NSView {
         wantsLayer = true
         layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         setupGestures()
+        setupLocalMouseEventMonitor()
     }
 
     deinit {
+        if let localMouseEventMonitor {
+            NSEvent.removeMonitor(localMouseEventMonitor)
+        }
         rawTouchStream?.stop()
     }
 
@@ -142,6 +153,10 @@ private final class CaptureView: NSView {
     }
 
     override var acceptsFirstResponder: Bool {
+        true
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         true
     }
 
@@ -535,6 +550,12 @@ private final class CaptureView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        guard !consumeIfAlreadyHandledByLocalMonitor(event) else { return }
+        handleCaptureMouseDown(event)
+    }
+
+    private func handleCaptureMouseDown(_ event: NSEvent) {
+        logger.info("capture mouse down button=\(event.buttonNumber) clicks=\(event.clickCount)")
         guard calibration.isLocked else {
             beginCalibrationMouseDrag(event)
             return
@@ -546,6 +567,9 @@ private final class CaptureView: NSView {
     private func beginPendingTouch(_ event: NSEvent) {
         endLiveScroll()
         endLivePinch()
+        if isRawTouchEnabled {
+            endRawTouchInjection()
+        }
         let localPoint = convert(event.locationInWindow, from: nil)
         guard let simulatorPoint = calibration.simulatorPoint(from: localPoint) else {
             logger.warn("capture touch ignored outside calibration rect local=\(format(localPoint))")
@@ -556,6 +580,7 @@ private final class CaptureView: NSView {
 
         pendingMouseDownLocalPoint = localPoint
         pendingMouseDownSimulatorPoint = simulatorPoint
+        beginLiveDrag(at: simulatorPoint)
     }
 
     private func beginCalibrationMouseDrag(_ event: NSEvent) {
@@ -570,6 +595,11 @@ private final class CaptureView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        guard !consumeIfAlreadyHandledByLocalMonitor(event) else { return }
+        handleCaptureMouseDragged(event)
+    }
+
+    private func handleCaptureMouseDragged(_ event: NSEvent) {
         guard calibration.isLocked else {
             updateCalibrationMouseDrag(event)
             return
@@ -600,8 +630,10 @@ private final class CaptureView: NSView {
     }
 
     private func beginLiveDrag(at simulatorPoint: CGPoint) {
+        guard liveDragSession == nil else { return }
         do {
-            let session = try injector.makeLiveTouchSession()
+            let session = try liveTapSession ?? injector.makeLiveTouchSession()
+            liveTapSession = session
             liveDragSession = session
             liveDragPoint = simulatorPoint
             logger.info("capture live drag began simulator=\(format(simulatorPoint))")
@@ -619,10 +651,11 @@ private final class CaptureView: NSView {
             return
         }
 
+        guard let startLocalPoint = pendingMouseDownLocalPoint else { return }
+        guard startLocalPoint.distance(to: localPoint) >= 3 else { return }
+
         if liveDragSession == nil {
-            guard let startLocalPoint = pendingMouseDownLocalPoint,
-                  let startSimulatorPoint = pendingMouseDownSimulatorPoint else { return }
-            guard startLocalPoint.distance(to: localPoint) >= 3 else { return }
+            guard let startSimulatorPoint = pendingMouseDownSimulatorPoint else { return }
             beginLiveDrag(at: startSimulatorPoint)
         }
 
@@ -647,16 +680,18 @@ private final class CaptureView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        guard !consumeIfAlreadyHandledByLocalMonitor(event) else { return }
+        handleCaptureMouseUp(event)
+    }
+
+    private func handleCaptureMouseUp(_ event: NSEvent) {
+        logger.info("capture mouse up button=\(event.buttonNumber) clicks=\(event.clickCount)")
         guard calibration.isLocked else {
             endCalibrationMouseDrag()
             return
         }
 
-        if liveDragSession != nil {
-            endLiveDrag(event)
-        } else if let simulatorPoint = pendingMouseDownSimulatorPoint {
-            performTap(at: simulatorPoint)
-        }
+        endLiveDrag(event)
         pendingMouseDownLocalPoint = nil
         pendingMouseDownSimulatorPoint = nil
     }
@@ -919,11 +954,56 @@ private final class CaptureView: NSView {
     }
 
     private func setupGestures() {
-        let pan = NSPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
-        addGestureRecognizer(pan)
-
         let magnify = NSMagnificationGestureRecognizer(target: self, action: #selector(handleMagnification(_:)))
         addGestureRecognizer(magnify)
+    }
+
+    private func setupLocalMouseEventMonitor() {
+        localMouseEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { [weak self] event in
+            self?.handleLocalMouseEvent(event) ?? event
+        }
+    }
+
+    private func handleLocalMouseEvent(_ event: NSEvent) -> NSEvent? {
+        guard let hostWindow,
+              let eventWindow = event.window,
+              eventWindow === hostWindow else {
+            return event
+        }
+
+        switch event.type {
+        case .leftMouseDown:
+            rememberLocallyHandledMouseEvent(event)
+            handleCaptureMouseDown(event)
+            return nil
+        case .leftMouseDragged:
+            rememberLocallyHandledMouseEvent(event)
+            handleCaptureMouseDragged(event)
+            return nil
+        case .leftMouseUp:
+            rememberLocallyHandledMouseEvent(event)
+            handleCaptureMouseUp(event)
+            return nil
+        default:
+            return event
+        }
+    }
+
+    private func rememberLocallyHandledMouseEvent(_ event: NSEvent) {
+        locallyHandledMouseEvents.append(MouseEventSignature(type: event.type, timestamp: event.timestamp))
+        if locallyHandledMouseEvents.count > 32 {
+            locallyHandledMouseEvents.removeFirst(locallyHandledMouseEvents.count - 32)
+        }
+    }
+
+    private func consumeIfAlreadyHandledByLocalMonitor(_ event: NSEvent) -> Bool {
+        let signature = MouseEventSignature(type: event.type, timestamp: event.timestamp)
+        guard let index = locallyHandledMouseEvents.firstIndex(of: signature) else {
+            return false
+        }
+        locallyHandledMouseEvents.remove(at: index)
+        logger.info("capture ignored delayed mouse event type=\(event.type.rawValue) timestamp=\(event.timestamp)")
+        return true
     }
 
     private func attachToSimulatorWindow() {
@@ -1036,6 +1116,11 @@ private final class CaptureView: NSView {
             return
         }
         logger.info("capture tap simulator=\(format(simulatorPoint))")
+        if isRawTouchEnabled {
+            performRawBackedTap(at: simulatorPoint)
+            return
+        }
+
         do {
             let session = try liveTapSession ?? injector.makeLiveTouchSession()
             liveTapSession = session
@@ -1044,6 +1129,31 @@ private final class CaptureView: NSView {
         } catch {
             logger.error("capture tap failed: \(error)")
         }
+    }
+
+    private func performRawBackedTap(at simulatorPoint: CGPoint) {
+        endRawTouchInjection()
+        guard let session = rawReusableSingleFingerSession else {
+            logger.warn("capture raw-backed tap fallback: reusable single-finger session missing")
+            do {
+                let fallbackSession = try injector.makeLiveTouchSession()
+                fallbackSession.begin(at: simulatorPoint)
+                fallbackSession.end(at: simulatorPoint, delay: 0.055)
+            } catch {
+                logger.error("capture raw-backed tap fallback failed: \(error)")
+            }
+            return
+        }
+
+        rawSingleFingerSession = session
+        rawSingleFingerPoint = simulatorPoint
+        rawTouchMode = .single
+        session.begin(at: simulatorPoint)
+        session.end(at: simulatorPoint, delay: 0.055)
+        session.waitUntilIdle()
+        rawSingleFingerSession = nil
+        rawSingleFingerPoint = nil
+        rawTouchMode = nil
     }
 
     @objc private func handlePan(_ gesture: NSPanGestureRecognizer) {

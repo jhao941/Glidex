@@ -29,8 +29,15 @@ final class SimulatorHIDClient {
         return hidClient
     }
 
-    func send(message: UnsafeMutableRawPointer) {
-        if let errorCString = st_send_hid_message_sync(Unmanaged.passUnretained(rawClient).toOpaque(), message, true, 1.0) {
+    func send(message: UnsafeMutableRawPointer, waitForCompletion: Bool = true) {
+        let rawPointer = Unmanaged.passUnretained(rawClient).toOpaque()
+        let errorCString: UnsafePointer<CChar>?
+        if waitForCompletion {
+            errorCString = st_send_hid_message_sync(rawPointer, message, true, 1.0)
+        } else {
+            errorCString = st_send_hid_message_async(rawPointer, message, true)
+        }
+        if let errorCString {
             defer { free(UnsafeMutableRawPointer(mutating: errorCString)) }
             logger.error("sendWithMessage completion error: \(String(cString: errorCString))")
         }

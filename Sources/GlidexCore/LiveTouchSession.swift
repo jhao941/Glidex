@@ -84,7 +84,7 @@ public final class LiveTouchSession: @unchecked Sendable {
             )
             logTouchEventIfEnabled(description: description, direction: direction, point: point)
             logMessageIfEnabled(message)
-            hidClient.send(message: message)
+            hidClient.send(message: message, waitForCompletion: false)
         } catch {
             logger.error("\(description) failed: \(error)")
         }
