@@ -50,11 +50,6 @@ private final class CaptureView: NSView {
         case resize(startRect: CGRect, startPoint: CGPoint)
     }
 
-    private enum LiveScrollAxis {
-        case horizontal
-        case vertical
-    }
-
     private enum RawTouchInjectionMode {
         case single
         case twoFingerScroll
@@ -79,38 +74,17 @@ private final class CaptureView: NSView {
 
     private let logger: Logger
     private let injector: SimulatorInjector
-    private let injectionQueue = DispatchQueue(label: "glidex.capture.injection", qos: .userInitiated)
     weak var hostWindow: NSWindow?
     private var calibration = CalibrationState.defaultState
     private var calibrationDragMode: CalibrationDragMode?
     private var pendingMouseDownLocalPoint: CGPoint?
     private var pendingMouseDownSimulatorPoint: CGPoint?
-    private var liveTapSession: LiveTouchSession?
+    private var mouseTouchSession: LiveTouchSession?
     private var liveDragSession: LiveTouchSession?
     private var liveDragPoint: CGPoint?
-    private var livePinchSession: LiveTwoFingerTouchSession?
-    private var livePinchCenter: CGPoint?
-    private var livePinchBaseRadius: CGFloat = 90
-    private var livePinchCurrentRadius: CGFloat = 90
-    private var livePinchLastMagnification: CGFloat = 0
-    private var livePinchStartTime: TimeInterval?
-    private var livePinchUpdateCount = 0
-    private var suppressClickUntil: TimeInterval = 0
-    private var accumulatedMagnification: CGFloat = 0
     private var isOverlayMode = false
     private var followsSimulatorWindow = false
     private var followTimer: Timer?
-    private var isInjectionInFlight = false
-    private var liveScrollSession: LiveTouchSession?
-    private var liveScrollPoint: CGPoint?
-    private var liveScrollAxis: LiveScrollAxis?
-    private var liveScrollVelocity = CGPoint.zero
-    private var liveScrollImpulseVelocity = CGPoint.zero
-    private var liveScrollLastUpdateTime: TimeInterval?
-    private var liveScrollEndTimer: Timer?
-    private var liveScrollFlingTimer: Timer?
-    private var liveScrollFlingVelocity = CGPoint.zero
-    private var liveScrollFlingFramesRemaining = 0
     private var isRawTouchEnabled = false
     private var rawTouchStream: MultitouchSupportRawTouchStream?
     private var rawTouchMode: RawTouchInjectionMode?
@@ -137,7 +111,6 @@ private final class CaptureView: NSView {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
-        setupGestures()
         setupLocalMouseEventMonitor()
     }
 
@@ -185,7 +158,9 @@ private final class CaptureView: NSView {
         switch event.charactersIgnoringModifiers?.lowercased() {
         case "l":
             calibration.isLocked.toggle()
-            if !calibration.isLocked {
+            if calibration.isLocked {
+                startRawTouchBackend()
+            } else {
                 stopRawTouchBackend()
             }
             logger.info("capture calibration \(calibration.isLocked ? "locked" : "unlocked") rect=\(format(calibration.captureRect))")
@@ -196,11 +171,10 @@ private final class CaptureView: NSView {
             toggleSimulatorFollow()
         case "t":
             toggleOverlayMode()
-        case "m":
-            toggleRawTouchBackend()
         case "r":
             calibration.captureRect = defaultCaptureRect(in: bounds)
             calibration.isLocked = false
+            stopRawTouchBackend()
             logger.info("capture calibration reset rect=\(format(calibration.captureRect))")
             needsDisplay = true
         default:
@@ -208,19 +182,8 @@ private final class CaptureView: NSView {
         }
     }
 
-    private func toggleRawTouchBackend() {
-        if isRawTouchEnabled {
-            stopRawTouchBackend()
-        } else {
-            startRawTouchBackend()
-        }
-        needsDisplay = true
-    }
-
     private func startRawTouchBackend() {
         guard !isRawTouchEnabled else { return }
-        endLiveScroll()
-        endLivePinch()
         endLiveDrag(at: liveDragPoint)
 
         do {
@@ -298,32 +261,6 @@ private final class CaptureView: NSView {
 
     private func ignoreRawSingleFingerTouch(_ contact: RawTouchContact) {
         endRawSingleFingerTouchIfModeIsSingle()
-    }
-
-    private func updateRawSingleFingerTouch(to point: CGPoint) {
-        if rawTouchMode == .twoFingerPinch {
-            endRawTwoFingerTouch()
-        } else if rawTouchMode == .twoFingerScroll {
-            endRawSingleFingerTouch()
-        }
-
-        if rawSingleFingerSession == nil {
-            do {
-                let session = try injector.makeLiveTouchSession()
-                rawSingleFingerSession = session
-                rawSingleFingerPoint = point
-                rawTouchMode = .single
-                logger.info("capture raw single touch began point=\(format(point))")
-                session.begin(at: point)
-            } catch {
-                logger.error("capture raw single touch failed to begin: \(error)")
-            }
-            return
-        }
-
-        guard let session = rawSingleFingerSession else { return }
-        rawSingleFingerPoint = point
-        session.update(to: point)
     }
 
     private func updateRawTwoFingerGesture(contacts: (RawTouchContact, RawTouchContact), timestamp: Double) {
@@ -492,10 +429,6 @@ private final class CaptureView: NSView {
         }
     }
 
-    private func simulatorPoint(fromRawTouch contact: RawTouchContact) -> CGPoint {
-        simulatorPoint(fromNormalizedRawTouch: contact.normalizedPosition)
-    }
-
     private func simulatorPoint(fromNormalizedRawTouch point: CGPoint) -> CGPoint {
         let x = min(max(point.x, 0), 1)
         let y = min(max(point.y, 0), 1)
@@ -565,8 +498,6 @@ private final class CaptureView: NSView {
     }
 
     private func beginPendingTouch(_ event: NSEvent) {
-        endLiveScroll()
-        endLivePinch()
         if isRawTouchEnabled {
             endRawTouchInjection()
         }
@@ -632,8 +563,8 @@ private final class CaptureView: NSView {
     private func beginLiveDrag(at simulatorPoint: CGPoint) {
         guard liveDragSession == nil else { return }
         do {
-            let session = try liveTapSession ?? injector.makeLiveTouchSession()
-            liveTapSession = session
+            let session = try mouseTouchSession ?? injector.makeLiveTouchSession()
+            mouseTouchSession = session
             liveDragSession = session
             liveDragPoint = simulatorPoint
             logger.info("capture live drag began simulator=\(format(simulatorPoint))")
@@ -694,268 +625,6 @@ private final class CaptureView: NSView {
         endLiveDrag(event)
         pendingMouseDownLocalPoint = nil
         pendingMouseDownSimulatorPoint = nil
-    }
-
-    override func scrollWheel(with event: NSEvent) {
-        guard !isRawTouchEnabled else {
-            endLiveScroll()
-            return
-        }
-
-        guard calibration.isLocked else {
-            endLiveScroll()
-            super.scrollWheel(with: event)
-            return
-        }
-
-        if shouldEndLiveScroll(event) {
-            finishLiveScroll(allowFling: true)
-            return
-        }
-        guard shouldUpdateLiveScroll(event) else { return }
-
-        let localPoint = convert(event.locationInWindow, from: nil)
-        guard let center = calibration.simulatorPoint(from: localPoint) else {
-            endLiveScroll()
-            super.scrollWheel(with: event)
-            return
-        }
-
-        if event.phase.contains(.began), liveScrollSession != nil {
-            endLiveScroll()
-        }
-
-        let rawDeltaX = event.scrollingDeltaX
-        let rawDeltaY = event.scrollingDeltaY
-        let magnitude = hypot(rawDeltaX, rawDeltaY)
-        let minimumMagnitude: CGFloat = event.hasPreciseScrollingDeltas ? 0.5 : 2.0
-        guard magnitude >= minimumMagnitude else { return }
-
-        let axis = liveScrollAxis ?? resolvedLiveScrollAxis(deltaX: rawDeltaX, deltaY: rawDeltaY)
-        liveScrollAxis = axis
-        let delta = mappedLiveScrollDelta(deltaX: rawDeltaX, deltaY: rawDeltaY, axis: axis)
-        let gain: CGFloat = event.hasPreciseScrollingDeltas ? 2.0 : 8.0
-        let basePoint = liveScrollPoint ?? center
-        let desiredDelta = CGPoint(x: delta.x * gain, y: delta.y * gain)
-        let nextPoint = liveScrollPoint(
-            from: basePoint,
-            desiredDelta: desiredDelta,
-            precise: event.hasPreciseScrollingDeltas
-        )
-        guard basePoint.distance(to: nextPoint) >= 0.5 else { return }
-
-        guard let session = ensureLiveScrollSession(startingAt: center) else { return }
-        updateLiveScrollImpulseVelocity(desiredDelta: desiredDelta)
-        updateLiveScrollVelocity(from: basePoint, to: nextPoint, eventTime: event.timestamp)
-        liveScrollPoint = nextPoint
-        logger.info("capture live scroll update axis=\(axis) point=\(format(nextPoint)) delta=(\(String(format: "%.2f", delta.x)), \(String(format: "%.2f", delta.y)))")
-        session.update(to: nextPoint)
-        scheduleLiveScrollEndTimer()
-    }
-
-    private func shouldEndLiveScroll(_ event: NSEvent) -> Bool {
-        event.phase.contains(.ended)
-            || event.phase.contains(.cancelled)
-            || event.momentumPhase.contains(.ended)
-            || event.momentumPhase.contains(.cancelled)
-    }
-
-    private func shouldUpdateLiveScroll(_ event: NSEvent) -> Bool {
-        guard event.momentumPhase.isEmpty else { return false }
-        return true
-    }
-
-    private func resolvedLiveScrollAxis(deltaX: CGFloat, deltaY: CGFloat) -> LiveScrollAxis {
-        abs(deltaX) >= abs(deltaY) ? .horizontal : .vertical
-    }
-
-    private func mappedLiveScrollDelta(deltaX: CGFloat, deltaY: CGFloat, axis: LiveScrollAxis) -> CGPoint {
-        let xSign: CGFloat = 1
-        let ySign: CGFloat = 1
-
-        switch axis {
-        case .horizontal:
-            return CGPoint(x: deltaX * xSign, y: 0)
-        case .vertical:
-            return CGPoint(x: 0, y: deltaY * ySign)
-        }
-    }
-
-    private func liveScrollPoint(from point: CGPoint, desiredDelta: CGPoint, precise: Bool) -> CGPoint {
-        let maximumStep: CGFloat = precise ? 36 : 48
-        let distance = hypot(desiredDelta.x, desiredDelta.y)
-        let scale = distance > maximumStep ? maximumStep / distance : 1
-        return calibration.clampedSimulatorPoint(CGPoint(
-            x: point.x + desiredDelta.x * scale,
-            y: point.y + desiredDelta.y * scale
-        ))
-    }
-
-    private func ensureLiveScrollSession(startingAt point: CGPoint) -> LiveTouchSession? {
-        if let liveScrollSession {
-            return liveScrollSession
-        }
-
-        endLivePinch()
-        do {
-            let session = try injector.makeLiveTouchSession()
-            let startPoint = calibration.clampedSimulatorPoint(point)
-            liveScrollSession = session
-            liveScrollPoint = startPoint
-            liveScrollVelocity = .zero
-            liveScrollImpulseVelocity = .zero
-            liveScrollLastUpdateTime = nil
-            liveScrollFlingTimer?.invalidate()
-            liveScrollFlingTimer = nil
-            logger.info("capture live scroll began point=\(format(startPoint))")
-            session.begin(at: startPoint)
-            return session
-        } catch {
-            logger.error("capture live scroll failed to begin: \(error)")
-            return nil
-        }
-    }
-
-    private func updateLiveScrollVelocity(from oldPoint: CGPoint, to newPoint: CGPoint, eventTime: TimeInterval) {
-        let previousTime = liveScrollLastUpdateTime
-        liveScrollLastUpdateTime = eventTime
-        guard let previousTime else { return }
-
-        let dt = min(max(eventTime - previousTime, 1.0 / 120.0), 0.05)
-        let instantVelocity = CGPoint(
-            x: (newPoint.x - oldPoint.x) / dt,
-            y: (newPoint.y - oldPoint.y) / dt
-        )
-        liveScrollVelocity = CGPoint(
-            x: liveScrollVelocity.x * 0.35 + instantVelocity.x * 0.65,
-            y: liveScrollVelocity.y * 0.35 + instantVelocity.y * 0.65
-        )
-    }
-
-    private func updateLiveScrollImpulseVelocity(desiredDelta: CGPoint) {
-        let instantVelocity = CGPoint(x: desiredDelta.x * 60.0, y: desiredDelta.y * 60.0)
-        liveScrollImpulseVelocity = CGPoint(
-            x: liveScrollImpulseVelocity.x * 0.25 + instantVelocity.x * 0.75,
-            y: liveScrollImpulseVelocity.y * 0.25 + instantVelocity.y * 0.75
-        )
-    }
-
-    private func finishLiveScroll(allowFling: Bool) {
-        liveScrollEndTimer?.invalidate()
-        liveScrollEndTimer = nil
-        guard allowFling, startLiveScrollFlingIfNeeded() else {
-            endLiveScroll()
-            return
-        }
-    }
-
-    private func startLiveScrollFlingIfNeeded() -> Bool {
-        guard liveScrollSession != nil, liveScrollPoint != nil else { return false }
-        let velocity = strongerLiveScrollVelocity()
-        let speed = hypot(velocity.x, velocity.y)
-        guard speed >= 650 else {
-            logger.info("capture live scroll fling skipped speed=\(Int(speed))")
-            return false
-        }
-
-        liveScrollFlingVelocity = clampedLiveScrollVelocity(velocity)
-        liveScrollFlingFramesRemaining = 5
-        liveScrollFlingTimer?.invalidate()
-        logger.info("capture live scroll fling began velocity=(\(Int(liveScrollFlingVelocity.x)), \(Int(liveScrollFlingVelocity.y))) speed=\(Int(speed))")
-
-        let timer = Timer(
-            timeInterval: 1.0 / 60.0,
-            target: self,
-            selector: #selector(handleLiveScrollFlingTimer(_:)),
-            userInfo: nil,
-            repeats: true
-        )
-        liveScrollFlingTimer = timer
-        RunLoop.main.add(timer, forMode: .common)
-        return true
-    }
-
-    @objc private func handleLiveScrollFlingTimer(_ timer: Timer) {
-        advanceLiveScrollFling(timer: timer)
-    }
-
-    private func advanceLiveScrollFling(timer: Timer) {
-        guard let session = liveScrollSession, let point = liveScrollPoint else {
-            timer.invalidate()
-            liveScrollFlingTimer = nil
-            return
-        }
-
-        let nextPoint = calibration.clampedSimulatorPoint(CGPoint(
-            x: point.x + liveScrollFlingVelocity.x / 60.0,
-            y: point.y + liveScrollFlingVelocity.y / 60.0
-        ))
-        liveScrollPoint = nextPoint
-        session.update(to: nextPoint)
-
-        liveScrollFlingVelocity.x *= 0.72
-        liveScrollFlingVelocity.y *= 0.72
-        liveScrollFlingFramesRemaining -= 1
-
-        if liveScrollFlingFramesRemaining <= 0 || point.distance(to: nextPoint) < 0.5 {
-            timer.invalidate()
-            liveScrollFlingTimer = nil
-            endLiveScroll()
-        }
-    }
-
-    private func strongerLiveScrollVelocity() -> CGPoint {
-        let streamSpeed = hypot(liveScrollVelocity.x, liveScrollVelocity.y)
-        let impulseSpeed = hypot(liveScrollImpulseVelocity.x, liveScrollImpulseVelocity.y)
-        return impulseSpeed > streamSpeed ? liveScrollImpulseVelocity : liveScrollVelocity
-    }
-
-    private func clampedLiveScrollVelocity(_ velocity: CGPoint) -> CGPoint {
-        let maximumSpeed: CGFloat = 3800
-        let speed = hypot(velocity.x, velocity.y)
-        guard speed > maximumSpeed else { return velocity }
-        let scale = maximumSpeed / speed
-        return CGPoint(x: velocity.x * scale, y: velocity.y * scale)
-    }
-
-    private func endLiveScroll() {
-        guard let session = liveScrollSession else { return }
-        liveScrollEndTimer?.invalidate()
-        liveScrollEndTimer = nil
-        liveScrollFlingTimer?.invalidate()
-        liveScrollFlingTimer = nil
-        logger.info("capture live scroll ended point=\(liveScrollPoint.map(format) ?? "nil")")
-        session.end(at: liveScrollPoint)
-        liveScrollSession = nil
-        liveScrollPoint = nil
-        liveScrollAxis = nil
-        liveScrollVelocity = .zero
-        liveScrollImpulseVelocity = .zero
-        liveScrollLastUpdateTime = nil
-        liveScrollFlingVelocity = .zero
-        liveScrollFlingFramesRemaining = 0
-    }
-
-    private func scheduleLiveScrollEndTimer() {
-        liveScrollEndTimer?.invalidate()
-        let timer = Timer(
-            timeInterval: 0.045,
-            target: self,
-            selector: #selector(handleLiveScrollEndTimer(_:)),
-            userInfo: nil,
-            repeats: false
-        )
-        liveScrollEndTimer = timer
-        RunLoop.main.add(timer, forMode: .common)
-    }
-
-    @objc private func handleLiveScrollEndTimer(_ timer: Timer) {
-        finishLiveScroll(allowFling: true)
-    }
-
-    private func setupGestures() {
-        let magnify = NSMagnificationGestureRecognizer(target: self, action: #selector(handleMagnification(_:)))
-        addGestureRecognizer(magnify)
     }
 
     private func setupLocalMouseEventMonitor() {
@@ -1071,6 +740,7 @@ private final class CaptureView: NSView {
         hostWindow?.setFrame(frame, display: true, animate: animate)
 
         if resetCalibration {
+            stopRawTouchBackend()
             calibration.captureRect = defaultCaptureRect(in: CGRect(origin: .zero, size: frame.size))
             calibration.isLocked = false
             return
@@ -1095,256 +765,6 @@ private final class CaptureView: NSView {
         needsDisplay = true
     }
 
-    @objc private func handleClick(_ gesture: NSClickGestureRecognizer) {
-        guard calibration.isLocked, gesture.state == .ended else { return }
-        guard livePinchSession == nil, Date().timeIntervalSinceReferenceDate >= suppressClickUntil else {
-            logger.info("capture click suppressed during pinch")
-            return
-        }
-        let localPoint = gesture.location(in: self)
-        guard let simulatorPoint = calibration.simulatorPoint(from: localPoint) else {
-            logger.warn("capture click ignored outside calibration rect local=\(format(localPoint))")
-            return
-        }
-        logger.info("capture click local=\(format(localPoint)) simulator=\(format(simulatorPoint))")
-        performTap(at: simulatorPoint)
-    }
-
-    private func performTap(at simulatorPoint: CGPoint) {
-        guard Date().timeIntervalSinceReferenceDate >= suppressClickUntil else {
-            logger.info("capture tap suppressed during pinch")
-            return
-        }
-        logger.info("capture tap simulator=\(format(simulatorPoint))")
-        if isRawTouchEnabled {
-            performRawBackedTap(at: simulatorPoint)
-            return
-        }
-
-        do {
-            let session = try liveTapSession ?? injector.makeLiveTouchSession()
-            liveTapSession = session
-            session.begin(at: simulatorPoint)
-            session.end(at: simulatorPoint, delay: 0.055)
-        } catch {
-            logger.error("capture tap failed: \(error)")
-        }
-    }
-
-    private func performRawBackedTap(at simulatorPoint: CGPoint) {
-        endRawTouchInjection()
-        guard let session = rawReusableSingleFingerSession else {
-            logger.warn("capture raw-backed tap fallback: reusable single-finger session missing")
-            do {
-                let fallbackSession = try injector.makeLiveTouchSession()
-                fallbackSession.begin(at: simulatorPoint)
-                fallbackSession.end(at: simulatorPoint, delay: 0.055)
-            } catch {
-                logger.error("capture raw-backed tap fallback failed: \(error)")
-            }
-            return
-        }
-
-        rawSingleFingerSession = session
-        rawSingleFingerPoint = simulatorPoint
-        rawTouchMode = .single
-        session.begin(at: simulatorPoint)
-        session.end(at: simulatorPoint, delay: 0.055)
-        session.waitUntilIdle()
-        rawSingleFingerSession = nil
-        rawSingleFingerPoint = nil
-        rawTouchMode = nil
-    }
-
-    @objc private func handlePan(_ gesture: NSPanGestureRecognizer) {
-        guard calibration.isLocked else {
-            handleCalibrationPan(gesture)
-            return
-        }
-    }
-
-    private func handleCalibrationPan(_ gesture: NSPanGestureRecognizer) {
-        let point = gesture.location(in: self)
-
-        switch gesture.state {
-        case .began:
-            if resizeHandleRect.contains(point) {
-                calibrationDragMode = .resize(startRect: calibration.captureRect, startPoint: point)
-            } else if calibration.captureRect.contains(point) {
-                calibrationDragMode = .move(startRect: calibration.captureRect, startPoint: point)
-            } else {
-                calibrationDragMode = nil
-            }
-        case .changed:
-            guard let calibrationDragMode else { return }
-            switch calibrationDragMode {
-            case let .move(startRect, startPoint):
-                let delta = CGPoint(x: point.x - startPoint.x, y: point.y - startPoint.y)
-                calibration.captureRect = constrainedCaptureRect(startRect.offsetBy(dx: delta.x, dy: delta.y))
-            case let .resize(startRect, startPoint):
-                let delta = CGPoint(x: point.x - startPoint.x, y: point.y - startPoint.y)
-                calibration.captureRect = constrainedCaptureRect(resizedRect(from: startRect, delta: delta))
-            }
-            needsDisplay = true
-        case .ended, .cancelled:
-            guard calibrationDragMode != nil else { return }
-            calibrationDragMode = nil
-            logger.info("capture calibration updated rect=\(format(calibration.captureRect))")
-            needsDisplay = true
-        default:
-            break
-        }
-    }
-
-    @objc private func handleMagnification(_ gesture: NSMagnificationGestureRecognizer) {
-        guard !isRawTouchEnabled else { return }
-        guard calibration.isLocked else { return }
-        let localPoint = gesture.location(in: self)
-
-        switch gesture.state {
-        case .began:
-            beginLivePinch(at: localPoint)
-        case .changed:
-            updateLivePinch(magnification: gesture.magnification)
-        case .ended, .cancelled:
-            endLivePinch()
-        default:
-            break
-        }
-    }
-
-    private func beginLivePinch(at localPoint: CGPoint) {
-        guard let center = calibration.simulatorPoint(from: localPoint) else {
-            logger.warn("capture live pinch ignored outside calibration rect local=\(format(localPoint))")
-            return
-        }
-
-        endLiveScroll()
-        endLiveDrag(at: liveDragPoint)
-
-        do {
-            let session = try injector.makeLiveTwoFingerTouchSession()
-            let radius = pinchRadius(for: 1)
-            let fingers = pinchFingers(center: center, radius: radius)
-            livePinchSession = session
-            livePinchCenter = center
-            livePinchBaseRadius = radius
-            livePinchCurrentRadius = radius
-            livePinchLastMagnification = 0
-            livePinchStartTime = Date().timeIntervalSinceReferenceDate
-            livePinchUpdateCount = 0
-            suppressClickUntil = Date().timeIntervalSinceReferenceDate + 0.35
-            accumulatedMagnification = 0
-            logger.info("capture live pinch began center=\(format(center)) radius=\(Int(radius))")
-            session.begin(finger1: fingers.0, finger2: fingers.1)
-        } catch {
-            logger.error("capture live pinch failed to begin: \(error)")
-        }
-    }
-
-    private func updateLivePinch(magnification: CGFloat) {
-        guard let session = livePinchSession, let center = livePinchCenter else { return }
-        let delta = magnification - livePinchLastMagnification
-        livePinchLastMagnification = magnification
-        accumulatedMagnification = magnification
-        let radius = clampedPinchRadius(livePinchCurrentRadius + delta * 130)
-        guard abs(radius - livePinchCurrentRadius) >= 0.75 else { return }
-        let fingers = pinchFingers(center: center, radius: radius)
-        livePinchCurrentRadius = radius
-        livePinchUpdateCount += 1
-        logger.info("capture live pinch update center=\(format(center)) magnification=\(String(format: "%.3f", Double(magnification))) delta=\(String(format: "%.3f", Double(delta))) radius=\(Int(radius))")
-        session.update(finger1: fingers.0, finger2: fingers.1)
-    }
-
-    private func endLivePinch() {
-        guard let session = livePinchSession else { return }
-        let center = livePinchCenter
-        if let center {
-            sendPinchTailIfNeeded(session: session, center: center)
-        }
-        let fingers = center.map { pinchFingers(center: $0, radius: livePinchCurrentRadius) }
-        logger.info("capture live pinch ended center=\(center.map(format) ?? "nil")")
-        session.end(finger1: fingers?.0, finger2: fingers?.1, delay: 1.0 / 60.0)
-        suppressClickUntil = Date().timeIntervalSinceReferenceDate + 0.12
-        livePinchSession = nil
-        livePinchCenter = nil
-        livePinchBaseRadius = 90
-        livePinchCurrentRadius = 90
-        livePinchLastMagnification = 0
-        livePinchStartTime = nil
-        livePinchUpdateCount = 0
-        accumulatedMagnification = 0
-    }
-
-    private func sendPinchTailIfNeeded(session: LiveTwoFingerTouchSession, center: CGPoint) {
-        let elapsed = Date().timeIntervalSinceReferenceDate - (livePinchStartTime ?? Date().timeIntervalSinceReferenceDate)
-        let radiusDelta = livePinchCurrentRadius - livePinchBaseRadius
-        let minimumFrames = 5
-        let needsTail = elapsed < 0.12 || livePinchUpdateCount < minimumFrames || abs(radiusDelta) < 12
-        guard needsTail else { return }
-
-        let direction: CGFloat
-        if abs(radiusDelta) >= 1 {
-            direction = radiusDelta.sign == .minus ? -1 : 1
-        } else {
-            direction = accumulatedMagnification < 0 ? -1 : 1
-        }
-        let minimumDelta = max(abs(radiusDelta), 24)
-        let targetRadius = clampedPinchRadius(livePinchBaseRadius + direction * minimumDelta)
-        let startRadius = livePinchCurrentRadius
-        let frames = max(1, minimumFrames - livePinchUpdateCount)
-
-        logger.info("capture live pinch tail frames=\(frames) from_radius=\(Int(startRadius)) to_radius=\(Int(targetRadius)) elapsed_ms=\(Int(elapsed * 1000)) updates=\(livePinchUpdateCount)")
-        for index in 1...frames {
-            let progress = CGFloat(index) / CGFloat(frames)
-            let radius = startRadius + (targetRadius - startRadius) * progress
-            let fingers = pinchFingers(center: center, radius: radius)
-            session.update(finger1: fingers.0, finger2: fingers.1, delay: 1.0 / 60.0)
-            livePinchCurrentRadius = radius
-        }
-    }
-
-    private func pinchRadius(for scale: CGFloat) -> CGFloat {
-        clampedPinchRadius(livePinchBaseRadius * scale)
-    }
-
-    private func clampedPinchRadius(_ radius: CGFloat) -> CGFloat {
-        min(max(radius, 8), min(calibration.simulatorSize.width, calibration.simulatorSize.height) * 0.49)
-    }
-
-    private func pinchFingers(center: CGPoint, radius: CGFloat) -> (CGPoint, CGPoint) {
-        let finger1 = calibration.clampedSimulatorPoint(CGPoint(x: center.x - radius, y: center.y))
-        let finger2 = calibration.clampedSimulatorPoint(CGPoint(x: center.x + radius, y: center.y))
-        return (finger1, finger2)
-    }
-
-    private func runInjection(_ action: @escaping @Sendable () throws -> Void) {
-        injectionQueue.async { [logger] in
-            do {
-                try action()
-            } catch {
-                logger.error("capture injection failed: \(error)")
-            }
-        }
-    }
-
-    private func runInjectionIfIdle(_ action: @escaping @Sendable () throws -> Void) {
-        guard !isInjectionInFlight else { return }
-        isInjectionInFlight = true
-
-        injectionQueue.async { [logger] in
-            do {
-                try action()
-            } catch {
-                logger.error("capture injection failed: \(error)")
-            }
-
-            DispatchQueue.main.async { [weak self] in
-                self?.isInjectionInFlight = false
-            }
-        }
-    }
-
     private func drawCaptureRect() {
         let rect = calibration.captureRect
         NSColor.controlAccentColor.withAlphaComponent(calibration.isLocked ? 0.18 : 0.10).setFill()
@@ -1364,8 +784,8 @@ private final class CaptureView: NSView {
     private func drawChrome() {
         let status = calibration.isLocked ? "Locked" : "Calibration"
         let follow = followsSimulatorWindow ? "follow on" : "follow off"
-        let raw = isRawTouchEnabled ? "raw on" : "raw off"
-        let detail = calibration.isLocked ? "Click, drag, scroll, pinch, or press M for raw touch (\(raw))" : "Drag frame, drag corner to resize, L locks, R resets, O attaches, F follows, T fades, M raw (\(follow), \(raw))"
+        let raw = isRawTouchEnabled ? "raw on" : "raw starting"
+        let detail = calibration.isLocked ? "Click/hold with mouse, use trackpad raw gestures (\(raw))" : "Drag frame, drag corner to resize, L locks and starts raw, R resets, O attaches, F follows, T fades (\(follow))"
         drawCenteredLabel("Glidex Capture - \(status)", y: bounds.maxY - 38, fontSize: 18, weight: .semibold)
         drawCenteredLabel(detail, y: bounds.maxY - 64, fontSize: 12, weight: .regular)
     }
