@@ -41,5 +41,9 @@ let package = Package(
                 .linkedFramework("Foundation"),
             ]
         ),
+        .testTarget(
+            name: "GlidexCoreTests",
+            dependencies: ["GlidexCore"]
+        ),
     ]
 )
