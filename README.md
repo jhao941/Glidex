@@ -103,6 +103,10 @@ The menu bar controls provide:
 - optional touch indicator
 - reattach, calibration, diagnostics, settings, and quit actions
 
+In Navigate mode, hold Option when a raw trackpad gesture begins to anchor only that gesture at the current mouse position inside the Simulator. The modifier, desktop mouse position, converted Simulator point, and final anchor policy are latched once at gesture begin. Releasing Option mid-gesture does not move or cancel the transaction. A pointer outside the Simulator safely falls back to ordinary Navigate behavior.
+
+Point remains a persistent fixed virtual-finger anchor. Edge chooses the nearest edge from that fixed point. Ordinary mouse hover does not move either persistent anchor.
+
 The overlay supports:
 
 - click and drag -> live single-touch transaction
@@ -112,6 +116,8 @@ The overlay supports:
 - calibration mode: drag the overlay to move it or drag its lower-right corner to resize it
 
 The window itself always remains fully opaque at the compositor level (`alphaValue = 1`). Only the inset border is drawn, so lowering border visibility never makes Simulator content dim or washed out. Paused and error states cancel active transactions before enabling click-through.
+
+Simulator lifecycle recovery uses Accessibility notifications for immediate window changes and a low-frequency health poll for window closure, app restart, and missed notifications. Geometry changes synchronously update the selected target, overlay frame, oriented screen metrics, and `CoordinateMapper`. Quartz/AppKit conversion uses the main display's global coordinate basis and supports displays positioned to either side or above the main display.
 
 The default raw-touch path follows the stable behavior established by commit `eb4da18` (`Make raw touch the default capture path`). Navigate uses the raw gesture centroid and is independent of mouse position. Point uses the explicitly moved virtual finger. Edge gestures are produced only in Edge mode and use the nearest edge to that marker.
 
@@ -124,6 +130,7 @@ TouchSource -> GestureInterpreter -> AnchorPolicy -> TouchTransaction -> TouchSi
 The gesture interpreter, coordinate mapper, anchor policy, overlay policy, target selection, and transaction lifecycle are pure logic covered by Swift Testing. `CaptureView` owns only AppKit responder events and drawing. Mouse events use one responder path; there is no parallel local event monitor or timestamp-based deduplication.
 
 Raw-frame fixtures replay through the production `GestureCoordinator`; see [`docs/v1-input-validation.md`](docs/v1-input-validation.md) for the automated/manual validation boundary.
+The menu bar and lifecycle validation record is in [`docs/menu-bar-validation.md`](docs/menu-bar-validation.md).
 
 ## Current status
 

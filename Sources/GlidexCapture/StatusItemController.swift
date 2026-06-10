@@ -21,10 +21,6 @@ final class StatusItemController: NSObject {
         self.state = state
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
-        statusItem.button?.image = NSImage(
-            systemSymbolName: "hand.draw",
-            accessibilityDescription: "Glidex"
-        )
         stateObserver = state.observe { [weak self] snapshot in
             self?.render(snapshot)
         }
@@ -39,13 +35,18 @@ final class StatusItemController: NSObject {
     }
 
     private func render(_ snapshot: GlidexAppSnapshot) {
+        let presentation = StatusItemPresentation(snapshot: snapshot)
+        statusItem.button?.image = NSImage(
+            systemSymbolName: presentation.symbolName,
+            accessibilityDescription: "Glidex \(snapshot.status.title)"
+        )
         statusItem.button?.contentTintColor = statusColor(for: snapshot.status)
         statusItem.button?.toolTip = "Glidex: \(snapshot.status.title)"
 
         let menu = NSMenu()
         menu.addItem(labelItem("Status: \(statusText(snapshot.status))"))
         menu.addItem(labelItem("Simulator: \(snapshot.target?.name ?? "None")"))
-        menu.addItem(labelItem("Option Anchor: \(snapshot.optionAnchorAvailability.title)"))
+        menu.addItem(labelItem("Option Anchor: \(presentation.optionAnchorText)"))
         menu.addItem(.separator())
 
         menu.addItem(actionItem(

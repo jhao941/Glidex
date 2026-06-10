@@ -36,7 +36,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         stateObserver = state.observe { [weak self] snapshot in
             self?.preferences.save(snapshot.preferences)
             self?.logger.info(
-                "app status=\(snapshot.status.title) enabled=\(snapshot.preferences.isEnabled) mode=\(snapshot.preferences.inputMode.rawValue) target=\(snapshot.target?.udid ?? "none")"
+                "app status=\(snapshot.status.title) enabled=\(snapshot.preferences.isEnabled) mode=\(snapshot.preferences.inputMode.rawValue) optionAnchor=\(self?.optionAnchorLogValue(snapshot.optionAnchorAvailability) ?? "unknown") target=\(snapshot.target?.udid ?? "none")"
             )
         }
         captureSession?.start()
@@ -110,6 +110,17 @@ final class AppController: NSObject, NSApplicationDelegate {
             "Restart Simulator and Glidex. If the issue persists, run glidex probe from Terminal."
         case .other:
             "Choose Reattach to Simulator. If the issue persists, run glidex probe from Terminal."
+        }
+    }
+
+    private func optionAnchorLogValue(_ availability: OptionAnchorAvailability) -> String {
+        switch availability {
+        case .inactive:
+            "inactive"
+        case .outsideSimulator:
+            "outside"
+        case let .available(point):
+            "available(\(Int(point.x)),\(Int(point.y)))"
         }
     }
 

@@ -76,10 +76,18 @@ final class CaptureView: NSView {
 
     private func drawBorder() {
         guard presentation.borderAlpha > 0 else { return }
+        if presentation.isCalibrationMode {
+            NSColor.systemBlue.withAlphaComponent(max(0.7, presentation.borderAlpha)).setStroke()
+            let border = NSBezierPath(rect: bounds.insetBy(dx: 2.5, dy: 2.5))
+            border.lineWidth = 3
+            border.setLineDash([7, 5], count: 2, phase: 0)
+            border.stroke()
+            return
+        }
         borderColor.withAlphaComponent(presentation.borderAlpha).setStroke()
-        let inset = presentation.isCalibrationMode ? 2.5 : 1.5
+        let inset: CGFloat = 1.5
         let border = NSBezierPath(rect: bounds.insetBy(dx: inset, dy: inset))
-        border.lineWidth = presentation.isCalibrationMode ? 3 : 2
+        border.lineWidth = 2
         border.stroke()
     }
 
