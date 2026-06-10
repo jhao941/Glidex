@@ -1,21 +1,23 @@
 # Glidex
 
-`GlidexCore` is a reusable Swift library and `glidex` is a minimal macOS CLI proof of concept for driving a booted iPhone Simulator through dynamically loaded private frameworks. The longer-term direction is a macOS overlay app that lets a Mac trackpad operate an Xcode iOS Simulator in a style similar to iPhone Mirroring.
+Glidex is a macOS capture app and reusable Swift core for operating a booted iPhone Simulator from Mac input. It dynamically loads the same broad private-framework stack historically proven by Facebook's FBSimulatorControl and idb work: CoreSimulator device discovery, SimulatorKit's legacy HID client, and Indigo digitizer messages. Glidex does not depend on idb directly; that project is the architectural reference and prior art for this technical path.
 
 Current scope:
 
 - discover booted simulators
 - dynamically load `CoreSimulator.framework` and `SimulatorKit.framework`
 - probe `SimServiceContext`, `SimDeviceSet`, `SimDeviceLegacyHIDClient`, and Indigo HID symbols
-- scaffold `tap`, `drag`, and `pinch` commands with detailed logging
-- provide a minimal AppKit capture window / overlay for early Mac gesture experiments
+- inject `tap`, `drag`, and `pinch` through Indigo HID
+- capture raw trackpad frames through MultitouchSupport
+- map mouse and two-finger trackpad input through a testable transaction pipeline
+- attach and follow the visible Simulator screen region through CGWindow and Accessibility APIs
 
 Current non-goals:
 
 - no menu bar app
-- no automatic Simulator window tracking yet
-- no `MultitouchSupport.framework`
-- no product architecture beyond the minimum needed to validate injection
+- no public/private-API compatibility guarantee across macOS and Xcode releases
+- no complete product UI, onboarding, signing, or distribution workflow
+- no guarantee yet for every device orientation, display scale, or multiple simultaneously booted simulators
 
 ## Layout
 
@@ -35,7 +37,10 @@ Current non-goals:
     │   ├── TouchMessageBuilder.swift
     │   └── ...
     ├── GlidexCapture
-    │   └── main.swift
+    │   ├── AppMain.swift
+    │   ├── CaptureView.swift
+    │   ├── GestureCoordinator.swift
+    │   └── SimulatorWindowTracker.swift
     └── glidexCLI
         ├── CLI.swift
         └── main.swift
@@ -49,7 +54,12 @@ Key files:
 - `Sources/GlidexCore/SimulatorInjector.swift`: command orchestration
 - `Sources/GlidexCore/GestureSynthesizer.swift`: higher-level gesture sequencing
 - `Sources/GlidexCore/TouchMessageBuilder.swift`: Indigo digitizer message construction
-- `Sources/GlidexCapture/main.swift`: minimal AppKit gesture capture window / overlay for click, drag, scroll, and pinch experiments
+- `Sources/GlidexCore/GestureInterpreter.swift`: pure raw-frame gesture state machine
+- `Sources/GlidexCore/TouchTransaction.swift`: begin/update/end/cancel lifecycle and injectable `TouchSink`
+- `Sources/GlidexCore/RawTouchStream.swift`: formal raw trackpad stream above isolated MultitouchSupport ABI bindings
+- `Sources/GlidexCapture/CaptureView.swift`: drawing, calibration, and AppKit responder entry points
+- `Sources/GlidexCapture/GestureCoordinator.swift`: input arbitration, anchor selection, coordinate mapping, and transaction ownership
+- `Sources/GlidexCapture/SimulatorWindowTracker.swift`: Simulator window and screen-region tracking
 - `Sources/CGlidexShim/*`: tiny C shim for Objective-C runtime method enumeration and message construction helpers
 
 ## Build
@@ -57,6 +67,7 @@ Key files:
 ```bash
 cd /Users/hao/Code/Glidex
 swift build
+swift test
 ```
 
 ## Run
@@ -70,9 +81,7 @@ swift run glidex pinch --center 200,400 --scale 1.2 --duration 0.5
 swift run glidex pinch --center 200,400 --scale 0.8 --duration 0.5
 ```
 
-## Capture App Prototype
-
-Round 2 adds a minimal AppKit capture window:
+## Capture App
 
 ```bash
 swift run glidex-capture
@@ -80,10 +89,9 @@ swift run glidex-capture
 
 The capture window contains a calibration frame that maps local Mac window coordinates into simulator points. It defaults to a 402 x 874 simulator-point mapping, matching the observed iPhone 16 Pro logical screen size. It supports:
 
-- click -> `SimulatorInjector.tap`
-- drag -> `SimulatorInjector.drag`
-- two-finger scroll / swipe -> short `SimulatorInjector.drag`
-- pinch gesture capture -> `SimulatorInjector.pinch`
+- click and drag -> live single-touch transaction
+- two-finger movement -> live navigation transaction
+- finger separation -> live two-contact pinch transaction
 - unlocked calibration mode: drag the frame to move it, drag the lower-right handle to resize it
 - `O`: attach the capture window to the currently visible Simulator window
 - `F`: toggle automatic follow for Simulator window moves/resizes
@@ -91,7 +99,15 @@ The capture window contains a calibration frame that maps local Mac window coord
 - `L`: lock/unlock calibration
 - `R`: reset calibration
 
-Round 4 makes the capture window manually attach to the visible Simulator window and fade into a translucent overlay. Round 5 maps trackpad two-finger scroll events to simulated drag gestures. Round 6 starts automatic follow after attaching, polling the visible Simulator window and moving/resizing the overlay when the Simulator window changes. The capture mapping still uses the fixed logical simulator size until active-device screen metrics are wired into the UI layer.
+The default raw-touch path follows the stable behavior established by commit `eb4da18` (`Make raw touch the default capture path`). The cursor position is the preferred gesture anchor, with the trackpad centroid as fallback.
+
+Input flows through explicit boundaries:
+
+```text
+TouchSource -> GestureInterpreter -> AnchorPolicy -> TouchTransaction -> TouchSink
+```
+
+The gesture interpreter, coordinate mapper, anchor policy, and transaction lifecycle are pure logic covered by Swift Testing. `CaptureView` owns AppKit responder events, drawing, and calibration. Mouse events use one responder path; there is no parallel local event monitor or timestamp-based deduplication.
 
 ## Current status
 
@@ -117,13 +133,17 @@ What is implemented:
     - `SimulatorKit.SimDeviceLegacyHIDClient`
     - handcrafted digitizer `IndigoHIDMessageStruct` frames
     - `sendWithMessage:freeWhenDone:completionQueue:completion:`
-  - `pinch` remains the next major multi-touch validation target
+- the capture app
+  - consumes MultitouchSupport raw frames through `RawTouchStream`
+  - injects through an `IndigoTouchSink`
+  - emits structured touch lifecycle logs containing gesture ID, source, intent, anchor, phase, and contacts
+  - releases active transactions on cancel, capture shutdown, raw-stream stop, and window focus loss
 
 What is not yet verified:
 
 - robust behavior across multiple booted simulators
 - coordinate mapping across device types, orientations, and simulator scale factors
-- multi-contact pinch delivery into apps such as Maps, Photos, and Safari
+- multi-contact pinch behavior across apps such as Maps, Photos, and Safari
 - foreground, background, and hidden Simulator.app behavior across macOS/Xcode versions
 
 ## Backend hypotheses
@@ -147,9 +167,9 @@ Observed on this machine during LLDB-assisted probing:
 - [AXe](https://github.com/cameroncooke/AXe)
   - confirms a modern standalone CLI approach and HID-based simulator automation are viable
 - [FBSimulatorControl / idb docs](https://fbidb.io/docs/fbsimulatorcontrol/)
-  - documents the historical `CoreSimulator + Indigo` model and why mach/HID reverse engineering is required
+  - establishes the historical `CoreSimulator + SimulatorKit/Indigo HID` approach that Glidex follows independently
 
-This PoC intentionally does not depend on those projects directly. They are used as architecture references and ABI sanity checks.
+Glidex intentionally does not depend on those projects directly. They remain architecture references and ABI sanity checks, especially because this private framework surface is undocumented and version-sensitive.
 
 ## Validation matrix
 
@@ -226,11 +246,6 @@ Useful LLDB ideas:
 - capture the actual screen hookup:
   - `log show --last 2m --predicate 'process == "glidex" && eventMessage CONTAINS[c] "screen ID"'`
 
-## Next step after this checkpoint
+## Next architecture checkpoint
 
-The next useful implementation step is not `MultitouchSupport`. It is to split the current CLI into a reusable core and a thin command-line wrapper:
-
-1. create a `GlidexCore` SwiftPM target
-2. keep `glidex` as a CLI executable target
-3. preserve current `list`, `probe`, `tap`, `drag`, and `pinch` behavior
-4. build a macOS overlay app on top of the same core in a later round
+The next product-facing work can build on `TouchSource`, `AnchorPolicy`, and `TouchSink` without moving private ABI code into the UI layer. Likely integration points are active-device screen metrics, explicit device-change notifications that cancel the current transaction, and product UI for selecting Navigate, Point, or Edge anchor behavior.

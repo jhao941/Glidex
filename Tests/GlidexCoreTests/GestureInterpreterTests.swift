@@ -56,7 +56,7 @@ struct GestureInterpreterTests {
         #expect(interpreter.consume(RawTouchFrame(timestamp: 0.04, frame: 4, contacts: [])) == nil)
     }
 
-    private func frame(_ number: Int32, timestamp: Double, first: CGPoint, second: CGPoint) -> RawTouchFrame {
+    private func frame(_ number: Int32, timestamp: Double, first: NormalizedTouchPoint, second: NormalizedTouchPoint) -> RawTouchFrame {
         RawTouchFrame(
             timestamp: timestamp,
             frame: number,
@@ -64,7 +64,7 @@ struct GestureInterpreterTests {
         )
     }
 
-    private func contact(id: Int32, state: Int32, at point: CGPoint) -> RawTouchContact {
+    private func contact(id: Int32, state: Int32, at point: NormalizedTouchPoint) -> RawTouchContact {
         RawTouchContact(
             identifier: id,
             state: state,
@@ -74,7 +74,7 @@ struct GestureInterpreterTests {
         )
     }
 
-    private func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
-        CGPoint(x: x, y: y)
+    private func point(_ x: CGFloat, _ y: CGFloat) -> NormalizedTouchPoint {
+        NormalizedTouchPoint(x: x, y: y)
     }
 }

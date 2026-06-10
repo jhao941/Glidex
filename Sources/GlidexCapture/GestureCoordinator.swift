@@ -80,6 +80,11 @@ final class GestureCoordinator {
         cancelActive(reason: reason)
     }
 
+    func prepareForDeviceChange() {
+        cancelAll(reason: "simulator device changing")
+        (sink as? DeviceAwareTouchSink)?.prepareForDeviceChange()
+    }
+
     private func beginRawGesture(_ gesture: InterpretedGesture) {
         cancelActive(reason: "raw gesture began")
         let fallback = mapper.simulatorPoint(fromNormalizedTouch: gesture.initialCentroid)

@@ -11,6 +11,18 @@ public struct NormalizedTouchPoint: Equatable, Sendable {
     }
 }
 
+public struct NormalizedTouchVector: Equatable, Sendable {
+    public var x: CGFloat
+    public var y: CGFloat
+
+    public init(x: CGFloat, y: CGFloat) {
+        self.x = x
+        self.y = y
+    }
+
+    public static let zero = NormalizedTouchVector(x: 0, y: 0)
+}
+
 public struct CapturePoint: Equatable, Sendable {
     public var x: CGFloat
     public var y: CGFloat

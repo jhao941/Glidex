@@ -153,6 +153,7 @@ final class CaptureView: NSView {
 
     private func startRawTouchBackend() {
         guard !isRawTouchEnabled else { return }
+        coordinator.prepareForDeviceChange()
         do {
             let stream = MultitouchSupportRawTouchStream(logger: logger) { [weak self] frame in
                 DispatchQueue.main.async {
@@ -236,6 +237,7 @@ final class CaptureView: NSView {
             logger.warn("capture overlay attach failed: Simulator window not found")
             return
         }
+        coordinator.prepareForDeviceChange()
         applyTrackedTarget(target, animate: true, resetCalibration: true)
         hostWindow?.level = .floating
         hostWindow?.makeKeyAndOrderFront(nil)

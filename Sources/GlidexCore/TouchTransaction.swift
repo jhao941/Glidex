@@ -33,6 +33,10 @@ public protocol TouchSink: AnyObject {
     func receive(_ event: TouchLifecycleEvent)
 }
 
+public protocol DeviceAwareTouchSink: TouchSink {
+    func prepareForDeviceChange()
+}
+
 public final class TouchTransaction {
     public enum State: Equatable, Sendable {
         case idle

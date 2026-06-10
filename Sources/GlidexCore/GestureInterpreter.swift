@@ -143,17 +143,11 @@ public struct GestureInterpreter: Sendable {
         return nil
     }
 
-    private static func centroid(_ first: CGPoint, _ second: CGPoint) -> NormalizedTouchPoint {
+    private static func centroid(_ first: NormalizedTouchPoint, _ second: NormalizedTouchPoint) -> NormalizedTouchPoint {
         NormalizedTouchPoint(
             x: (first.x + second.x) / 2,
             y: (first.y + second.y) / 2
         )
-    }
-}
-
-private extension CGPoint {
-    func distance(to other: CGPoint) -> CGFloat {
-        hypot(x - other.x, y - other.y)
     }
 }
 

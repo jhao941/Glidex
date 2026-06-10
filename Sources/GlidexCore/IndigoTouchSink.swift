@@ -1,6 +1,6 @@
 import Foundation
 
-public final class IndigoTouchSink: TouchSink {
+public final class IndigoTouchSink: DeviceAwareTouchSink {
     private enum ActiveSession {
         case single(LiveTouchSession)
         case twoFinger(LiveTwoFingerTouchSession)
@@ -18,6 +18,7 @@ public final class IndigoTouchSink: TouchSink {
     }
 
     public func receive(_ event: TouchLifecycleEvent) {
+        logger.touch(event)
         switch event {
         case let .begin(snapshot):
             begin(snapshot)
@@ -28,6 +29,21 @@ public final class IndigoTouchSink: TouchSink {
         case let .cancel(snapshot):
             finish(snapshot, cancelled: true)
         }
+    }
+
+    public func prepareForDeviceChange() {
+        for session in sessions.values {
+            switch session {
+            case let .single(session):
+                session.cancel()
+            case let .twoFinger(session):
+                session.cancel()
+            }
+        }
+        sessions.removeAll()
+        reusableSingleSession = nil
+        reusableTwoFingerSession = nil
+        logger.info("touch sink prepared for device change")
     }
 
     private func begin(_ snapshot: TouchTransactionSnapshot) {
