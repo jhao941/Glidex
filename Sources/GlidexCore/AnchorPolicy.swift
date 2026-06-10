@@ -36,3 +36,15 @@ public enum AnchorPolicy: Equatable, Sendable {
         }
     }
 }
+
+public extension AnchorPolicy {
+    static func nearestEdge(to point: SimulatorPoint, simulatorSize: SimulatorPointSize) -> SimulatorEdge {
+        let distances: [(SimulatorEdge, CGFloat)] = [
+            (.leading, point.x),
+            (.trailing, simulatorSize.width - point.x),
+            (.top, point.y),
+            (.bottom, simulatorSize.height - point.y),
+        ]
+        return distances.min(by: { $0.1 < $1.1 })?.0 ?? .leading
+    }
+}

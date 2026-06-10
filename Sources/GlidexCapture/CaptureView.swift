@@ -11,6 +11,7 @@ final class CaptureView: NSView {
     }
 
     private let logger: Logger
+    private let injector: SimulatorInjector
     private let coordinator: GestureCoordinator
     private let windowTracker: SimulatorWindowTracker
 
@@ -21,11 +22,13 @@ final class CaptureView: NSView {
     private var rawTouchStream: MultitouchSupportRawTouchStream?
     private var isRawTouchEnabled = false
     private var mouseTrackingArea: NSTrackingArea?
+    private var selectedTarget: SimulatorTarget?
 
     init(logger: Logger) {
         self.logger = logger
         do {
             let injector = try SimulatorInjector(logger: logger)
+            self.injector = injector
             let sink = IndigoTouchSink(injector: injector, logger: logger)
             self.coordinator = GestureCoordinator(
                 mapper: CoordinateMapper(
@@ -44,6 +47,9 @@ final class CaptureView: NSView {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        coordinator.onStateChange = { [weak self] in
+            self?.needsDisplay = true
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -74,6 +80,7 @@ final class CaptureView: NSView {
         NSColor.windowBackgroundColor.setFill()
         bounds.fill()
         drawCaptureRect()
+        drawVirtualFinger()
         drawChrome()
     }
 
@@ -104,6 +111,12 @@ final class CaptureView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        if let mode = mode(at: point) {
+            coordinator.setMode(mode)
+            logger.info("capture input mode=\(mode.rawValue)")
+            needsDisplay = true
+            return
+        }
         coordinator.updatePointer(CapturePoint(point))
         guard calibration.isLocked else {
             beginCalibrationDrag(at: point)
@@ -232,11 +245,36 @@ final class CaptureView: NSView {
             logger.warn("capture overlay attach failed: Simulator window not found")
             return
         }
+        guard selectSimulatorTarget(for: target) else { return }
         coordinator.prepareForDeviceChange()
         applyTrackedTarget(target, animate: true, resetCalibration: true)
         hostWindow?.level = .floating
         hostWindow?.makeKeyAndOrderFront(nil)
         startSimulatorFollow()
+    }
+
+    private func selectSimulatorTarget(for windowTarget: SimulatorWindowTracker.Target) -> Bool {
+        do {
+            let devices = try injector.listBootedSimulators()
+            guard let record = SimulatorTargetSelector.select(
+                from: devices,
+                windowTitle: windowTarget.windowTitle
+            ) else {
+                let summary = devices.map { "\($0.name) [\($0.udid)]" }.joined(separator: ", ")
+                logger.error("capture target selection failed windowTitle=\(windowTarget.windowTitle ?? "nil") candidates=\(summary)")
+                return false
+            }
+
+            let target = try injector.selectTarget(udid: record.udid)
+            selectedTarget = target
+            calibration.simulatorSize = target.pointSize.cgSize
+            updateCoordinatorMapper()
+            logger.info("capture target selected name=\(target.name) udid=\(target.udid) points=\(Int(target.pointSize.width))x\(Int(target.pointSize.height))")
+            return true
+        } catch {
+            logger.error("capture target selection failed: \(error)")
+            return false
+        }
     }
 
     private func toggleSimulatorFollow() {
@@ -252,6 +290,11 @@ final class CaptureView: NSView {
     }
 
     private func applyTrackedTarget(_ target: SimulatorWindowTracker.Target, animate: Bool, resetCalibration: Bool) {
+        if let title = target.windowTitle,
+           selectedTarget.map({ !title.localizedCaseInsensitiveContains($0.name) }) ?? true {
+            coordinator.prepareForDeviceChange()
+            guard selectSimulatorTarget(for: target) else { return }
+        }
         guard hostWindow?.frame.isNearlyEqual(to: target.frame) != true else { return }
         let previousSize = hostWindow?.frame.size ?? bounds.size
         hostWindow?.setFrame(target.frame, display: true, animate: animate)
@@ -309,6 +352,54 @@ final class CaptureView: NSView {
             : "Drag frame, drag corner to resize, L locks and starts raw, R resets, O attaches, F follows, T fades (\(follow))"
         drawCenteredLabel("Glidex Capture - \(status)", y: bounds.maxY - 38, fontSize: 18, weight: .semibold)
         drawCenteredLabel(detail, y: bounds.maxY - 64, fontSize: 12, weight: .regular)
+        drawModeControls()
+        let targetText = selectedTarget.map { "Target: \($0.name) [\($0.udid.prefix(8))]" } ?? "Target: not selected"
+        let inputText = "Input: \(coordinator.mode.rawValue) / \(isRawTouchEnabled ? "raw active" : "raw inactive")"
+        drawCenteredLabel("\(targetText)   \(inputText)", y: bounds.minY + 18, fontSize: 11, weight: .medium)
+    }
+
+    private func drawModeControls() {
+        for (mode, rect) in modeRects {
+            let selected = coordinator.mode == mode
+            (selected ? NSColor.controlAccentColor : NSColor.controlBackgroundColor).setFill()
+            NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6).fill()
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
+                .foregroundColor: selected ? NSColor.white : NSColor.labelColor,
+            ]
+            let title = mode.rawValue.capitalized
+            let size = title.size(withAttributes: attributes)
+            title.draw(
+                at: CGPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2),
+                withAttributes: attributes
+            )
+        }
+    }
+
+    private func drawVirtualFinger() {
+        guard coordinator.mode == .point || coordinator.mode == .edge,
+              let point = coordinator.capturePointForVirtualFinger()?.cgPoint else { return }
+        let ring = CGRect(x: point.x - 11, y: point.y - 11, width: 22, height: 22)
+        NSColor.systemOrange.withAlphaComponent(0.25).setFill()
+        NSBezierPath(ovalIn: ring).fill()
+        NSColor.systemOrange.setStroke()
+        let path = NSBezierPath(ovalIn: ring)
+        path.lineWidth = 2
+        path.stroke()
+    }
+
+    private var modeRects: [(CaptureInputMode, CGRect)] {
+        let width: CGFloat = 72
+        let spacing: CGFloat = 8
+        let total = width * 4 + spacing * 3
+        let startX = bounds.midX - total / 2
+        return CaptureInputMode.allCases.enumerated().map { index, mode in
+            (mode, CGRect(x: startX + CGFloat(index) * (width + spacing), y: bounds.maxY - 104, width: width, height: 24))
+        }
+    }
+
+    private func mode(at point: CGPoint) -> CaptureInputMode? {
+        modeRects.first(where: { $0.1.contains(point) })?.0
     }
 
     private var resizeHandleRect: CGRect {

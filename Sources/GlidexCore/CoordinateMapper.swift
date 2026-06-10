@@ -38,6 +38,14 @@ public struct CoordinateMapper: Equatable, Sendable {
         ))
     }
 
+    public func capturePoint(fromSimulator point: SimulatorPoint) -> CapturePoint? {
+        guard simulatorSize.width > 0, simulatorSize.height > 0 else { return nil }
+        return CapturePoint(
+            x: captureRect.minX + point.x / simulatorSize.width * captureRect.width,
+            y: captureRect.maxY - point.y / simulatorSize.height * captureRect.height
+        )
+    }
+
     public func clamped(_ point: SimulatorPoint) -> SimulatorPoint {
         SimulatorPoint(
             x: min(max(point.x, 0), simulatorSize.width),

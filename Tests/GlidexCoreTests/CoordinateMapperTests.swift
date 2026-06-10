@@ -28,4 +28,9 @@ struct CoordinateMapperTests {
         #expect(mapper.simulatorPoint(fromNormalizedTouch: NormalizedTouchPoint(x: -1, y: 2)) == SimulatorPoint(x: 0, y: 0))
         #expect(mapper.simulatorPoint(fromNormalizedTouch: NormalizedTouchPoint(x: 0.5, y: 0.25)) == SimulatorPoint(x: 200, y: 600))
     }
+
+    @Test("simulator points map back to capture coordinates")
+    func reverseMapping() {
+        #expect(mapper.capturePoint(fromSimulator: SimulatorPoint(x: 200, y: 400)) == CapturePoint(x: 110, y: 220))
+    }
 }

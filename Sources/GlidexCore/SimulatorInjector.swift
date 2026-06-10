@@ -6,6 +6,7 @@ public final class SimulatorInjector: @unchecked Sendable {
     private let resolver: BootedSimulatorResolver
     private let simulatorKit: SimulatorKitLoader
     private let backend: IndigoHIDBackend
+    private var selectedSimulator: BootedSimulatorRecord?
 
     public init(logger: Logger) throws {
         self.logger = logger
@@ -37,6 +38,21 @@ public final class SimulatorInjector: @unchecked Sendable {
 
     public func listBootedSimulators() throws -> [BootedSimulatorRecord] {
         try resolver.listBootedSimulators()
+    }
+
+    @discardableResult
+    public func selectTarget(udid: String) throws -> SimulatorTarget {
+        let devices = try listBootedSimulators()
+        guard let simulator = devices.first(where: { $0.udid.caseInsensitiveCompare(udid) == .orderedSame }) else {
+            throw GlidexError.simulatorNotFound("booted simulator not found for UDID \(udid)")
+        }
+        selectedSimulator = simulator
+        return try resolvedTarget(for: simulator)
+    }
+
+    public func selectedTarget() throws -> SimulatorTarget {
+        let simulator = try selectTargetRecord()
+        return try resolvedTarget(for: simulator)
     }
 
     public func tap(at point: CGPoint) throws {
@@ -76,11 +92,35 @@ public final class SimulatorInjector: @unchecked Sendable {
     }
 
     private func selectTarget() throws -> BootedSimulatorRecord {
+        try selectTargetRecord()
+    }
+
+    private func selectTargetRecord() throws -> BootedSimulatorRecord {
+        if let selectedSimulator {
+            return selectedSimulator
+        }
         let devices = try listBootedSimulators()
-        guard let first = devices.first else {
+        guard !devices.isEmpty else {
             throw GlidexError.simulatorNotFound("no booted simulator available")
         }
-        logger.info("selected simulator name=\(first.name) udid=\(first.udid)")
-        return first
+        guard devices.count == 1, let only = devices.first else {
+            let summary = devices.map { "\($0.name) [\($0.udid)]" }.joined(separator: ", ")
+            throw GlidexError.simulatorNotFound("multiple booted simulators require explicit selection: \(summary)")
+        }
+        selectedSimulator = only
+        logger.info("selected sole booted simulator name=\(only.name) udid=\(only.udid)")
+        return only
+    }
+
+    private func resolvedTarget(for simulator: BootedSimulatorRecord) throws -> SimulatorTarget {
+        let simDevice = try resolver.resolveSimDevice(udid: simulator.udid)
+        let metrics = backend.resolveScreenMetrics(for: simDevice, fallback: simulator)
+        return SimulatorTarget(
+            name: simulator.name,
+            udid: simulator.udid,
+            runtime: simulator.runtime,
+            deviceType: simulator.deviceType,
+            pointSize: SimulatorPointSize(metrics.pointSize)
+        )
     }
 }

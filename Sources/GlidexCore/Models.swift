@@ -21,7 +21,7 @@ struct SimctlListResponse: Decodable {
     let devices: [String: [SimulatorDevice]]
 }
 
-public struct BootedSimulatorRecord {
+public struct BootedSimulatorRecord: Sendable {
     public let name: String
     public let udid: String
     public let runtime: String
@@ -31,6 +31,28 @@ public struct BootedSimulatorRecord {
     public let scale: Double?
     public let dataPath: String?
     public let source: String
+}
+
+public struct SimulatorTarget: Equatable, Sendable {
+    public let name: String
+    public let udid: String
+    public let runtime: String
+    public let deviceType: String
+    public let pointSize: SimulatorPointSize
+
+    public init(
+        name: String,
+        udid: String,
+        runtime: String,
+        deviceType: String,
+        pointSize: SimulatorPointSize
+    ) {
+        self.name = name
+        self.udid = udid
+        self.runtime = runtime
+        self.deviceType = deviceType
+        self.pointSize = pointSize
+    }
 }
 
 struct ScreenMetrics {

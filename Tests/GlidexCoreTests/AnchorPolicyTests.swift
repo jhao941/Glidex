@@ -17,4 +17,10 @@ struct AnchorPolicyTests {
         #expect(AnchorPolicy.edge(.leading).resolve(fallback: fallback, simulatorSize: size) == SimulatorPoint(x: 1, y: 200))
         #expect(AnchorPolicy.edge(.bottom).resolve(fallback: fallback, simulatorSize: size) == SimulatorPoint(x: 100, y: 799))
     }
+
+    @Test("nearest edge selection is explicit and deterministic")
+    func nearestEdge() {
+        #expect(AnchorPolicy.nearestEdge(to: SimulatorPoint(x: 2, y: 300), simulatorSize: size) == .leading)
+        #expect(AnchorPolicy.nearestEdge(to: SimulatorPoint(x: 200, y: 799), simulatorSize: size) == .bottom)
+    }
 }

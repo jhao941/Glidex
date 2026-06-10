@@ -89,6 +89,13 @@ public enum GestureIntent: String, Equatable, Sendable {
     case pinch
 }
 
+public enum CaptureInputMode: String, CaseIterable, Equatable, Sendable {
+    case navigate
+    case point
+    case edge
+    case disabled
+}
+
 public struct TouchContactPoint: Equatable, Sendable {
     public var identifier: Int
     public var point: SimulatorPoint

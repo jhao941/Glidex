@@ -292,7 +292,7 @@ final class IndigoHIDBackend {
         logger.info("message \(TouchMessageBuilder.describe(message))")
     }
 
-    private func resolveScreenMetrics(for simDevice: AnyObject, fallback simulator: BootedSimulatorRecord) -> ScreenMetrics {
+    func resolveScreenMetrics(for simDevice: AnyObject, fallback simulator: BootedSimulatorRecord) -> ScreenMetrics {
         let deviceTypeSelector = NSSelectorFromString("deviceType")
         let sizeSelector = NSSelectorFromString("mainScreenSize")
         let scaleSelector = NSSelectorFromString("mainScreenScale")

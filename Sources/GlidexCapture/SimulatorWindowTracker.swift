@@ -14,6 +14,8 @@ final class SimulatorWindowTracker {
 
         var frame: CGRect
         var kind: Kind
+        var windowTitle: String?
+        var ownerPID: pid_t
     }
 
     private struct AXFrameCandidate {
@@ -26,6 +28,8 @@ final class SimulatorWindowTracker {
     private var simulatorSize = CGSize.zero
     private var onChange: ((Target) -> Void)?
     private var lastTarget: Target?
+    private var observer: AXObserver?
+    private var observedWindow: AXUIElement?
 
     private(set) var isFollowing = false
 
@@ -35,9 +39,12 @@ final class SimulatorWindowTracker {
 
     func currentTarget(simulatorSize: CGSize) -> Target? {
         if let frame = Self.findSimulatorScreenFrame(simulatorSize: simulatorSize) {
-            return Target(frame: frame, kind: .screen)
+            let window = Self.findSimulatorWindow()
+            return Target(frame: frame, kind: .screen, windowTitle: window?.title, ownerPID: window?.pid ?? 0)
         }
-        return Self.findSimulatorWindowFrame().map { Target(frame: $0, kind: .window) }
+        return Self.findSimulatorWindow().map {
+            Target(frame: $0.frame, kind: .window, windowTitle: $0.title, ownerPID: $0.pid)
+        }
     }
 
     func start(simulatorSize: CGSize, onChange: @escaping (Target) -> Void) {
@@ -45,21 +52,22 @@ final class SimulatorWindowTracker {
         self.simulatorSize = simulatorSize
         self.onChange = onChange
         isFollowing = true
-
-        let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.poll()
-            }
+        poll()
+        if !startAXObserver() {
+            startPollingFallback()
         }
-        self.timer = timer
-        RunLoop.main.add(timer, forMode: .common)
-        logger.info("capture simulator follow enabled")
+        logger.info("capture simulator follow enabled strategy=\(observer == nil ? "polling-fallback" : "ax-observer")")
     }
 
     func stop() {
         guard isFollowing else { return }
         timer?.invalidate()
         timer = nil
+        if let observer {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
+        }
+        observer = nil
+        observedWindow = nil
         onChange = nil
         lastTarget = nil
         isFollowing = false
@@ -72,13 +80,50 @@ final class SimulatorWindowTracker {
         onChange?(target)
     }
 
+    private func startAXObserver() -> Bool {
+        guard let target = currentTarget(simulatorSize: simulatorSize), target.ownerPID != 0 else { return false }
+        let appElement = AXUIElementCreateApplication(target.ownerPID)
+        guard let windows: [AXUIElement] = Self.copyAXAttribute(appElement, kAXWindowsAttribute),
+              let window = windows.first else { return false }
+
+        var createdObserver: AXObserver?
+        let result = AXObserverCreate(target.ownerPID, Self.observerCallback, &createdObserver)
+        guard result == .success, let createdObserver else { return false }
+        let refcon = Unmanaged.passUnretained(self).toOpaque()
+        guard AXObserverAddNotification(createdObserver, window, kAXMovedNotification as CFString, refcon) == .success,
+              AXObserverAddNotification(createdObserver, window, kAXResizedNotification as CFString, refcon) == .success else {
+            return false
+        }
+
+        observer = createdObserver
+        observedWindow = window
+        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(createdObserver), .commonModes)
+        return true
+    }
+
+    private func startPollingFallback() {
+        let timer = Timer(timeInterval: 2.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.poll() }
+        }
+        self.timer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private static let observerCallback: AXObserverCallback = { _, _, _, refcon in
+        guard let refcon else { return }
+        let tracker = Unmanaged<SimulatorWindowTracker>.fromOpaque(refcon).takeUnretainedValue()
+        DispatchQueue.main.async {
+            tracker.poll()
+        }
+    }
+
     private static func findSimulatorScreenFrame(simulatorSize: CGSize) -> CGRect? {
         guard AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary) else {
             return nil
         }
         guard let app = NSWorkspace.shared.runningApplications.first(where: {
             $0.bundleIdentifier == "com.apple.iphonesimulator"
-        }), let windowFrame = findSimulatorWindowFrame() else {
+        }), let windowFrame = findSimulatorWindow()?.frame else {
             return nil
         }
 
@@ -101,7 +146,7 @@ final class SimulatorWindowTracker {
         return candidates.max(by: { $0.score < $1.score })?.frame
     }
 
-    private static func findSimulatorWindowFrame() -> CGRect? {
+    private static func findSimulatorWindow() -> (frame: CGRect, title: String?, pid: pid_t)? {
         let options = CGWindowListOption(arrayLiteral: .optionOnScreenOnly, .excludeDesktopElements)
         guard let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
             return nil
@@ -111,7 +156,9 @@ final class SimulatorWindowTracker {
             guard let bounds = window[kCGWindowBounds as String] as? [String: CGFloat],
                   let x = bounds["X"], let y = bounds["Y"],
                   let width = bounds["Width"], let height = bounds["Height"] else { continue }
-            return appKitFrame(from: CGRect(x: x, y: y, width: width, height: height))
+            let title = window[kCGWindowName as String] as? String
+            let pid = (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value ?? 0
+            return (appKitFrame(from: CGRect(x: x, y: y, width: width, height: height)), title, pid)
         }
         return nil
     }

@@ -1,8 +1,6 @@
 import Foundation
-import GlidexCore
-
 @MainActor
-final class GestureCoordinator {
+public final class GestureCoordinator {
     private let sink: TouchSink
     private let logger: Logger
 
@@ -14,34 +12,65 @@ final class GestureCoordinator {
     private var pinchInitialRadius: CGFloat = 72
     private var pinchCurrentRadius: CGFloat = 72
 
-    init(mapper: CoordinateMapper, sink: TouchSink, logger: Logger) {
+    public private(set) var mode: CaptureInputMode = .navigate
+    public private(set) var virtualFingerPoint: SimulatorPoint?
+    public var onStateChange: (() -> Void)?
+
+    public init(mapper: CoordinateMapper, sink: TouchSink, logger: Logger) {
         self.mapper = mapper
         self.sink = sink
         self.logger = logger
     }
 
-    func updateMapper(_ mapper: CoordinateMapper) {
+    public func updateMapper(_ mapper: CoordinateMapper) {
         self.mapper = mapper
+        if virtualFingerPoint == nil {
+            virtualFingerPoint = SimulatorPoint(
+                x: mapper.simulatorSize.width / 2,
+                y: mapper.simulatorSize.height / 2
+            )
+        }
     }
 
-    func updatePointer(_ point: CapturePoint) {
-        guard let simulatorPoint = mapper.simulatorPoint(fromCapture: point) else { return }
+    public func updatePointer(_ point: CapturePoint) {
+        guard mode == .point || mode == .edge,
+              let simulatorPoint = mapper.simulatorPoint(fromCapture: point) else { return }
         lastMousePoint = simulatorPoint
+        virtualFingerPoint = simulatorPoint
+        onStateChange?()
     }
 
-    func beginMouse(at point: CapturePoint) {
+    public func setMode(_ mode: CaptureInputMode) {
+        guard self.mode != mode else { return }
+        cancelAll(reason: "input mode changed")
+        self.mode = mode
+        onStateChange?()
+    }
+
+    public func beginMouse(at point: CapturePoint) {
+        guard mode != .disabled else { return }
+        if mode == .point || mode == .edge {
+            updatePointer(point)
+            return
+        }
         cancelActive(reason: "mouse input began")
         guard let simulatorPoint = mapper.simulatorPoint(fromCapture: point) else { return }
         lastMousePoint = simulatorPoint
         handleMouseActions(mouseState.mouseDown(capture: point, simulator: simulatorPoint))
     }
 
-    func updateMouse(at point: CapturePoint) {
+    public func updateMouse(at point: CapturePoint) {
+        if mode == .point || mode == .edge {
+            updatePointer(point)
+            return
+        }
+        guard mode != .disabled else { return }
         guard let simulatorPoint = mapper.projectedSimulatorPoint(fromCapture: point) else { return }
         handleMouseActions(mouseState.mouseDragged(capture: point, simulator: simulatorPoint))
     }
 
-    func endMouse(at point: CapturePoint?) {
+    public func endMouse(at point: CapturePoint?) {
+        if mode == .point || mode == .edge || mode == .disabled { return }
         guard let point, let simulatorPoint = mapper.projectedSimulatorPoint(fromCapture: point) else {
             handleMouseAction(mouseState.cancel())
             return
@@ -49,7 +78,8 @@ final class GestureCoordinator {
         handleMouseActions(mouseState.mouseUp(capture: point, simulator: simulatorPoint))
     }
 
-    func handleRawFrame(_ frame: RawTouchFrame) {
+    public func handleRawFrame(_ frame: RawTouchFrame) {
+        guard mode != .disabled else { return }
         guard let output = interpreter.consume(frame) else { return }
         switch output {
         case .pending:
@@ -63,13 +93,13 @@ final class GestureCoordinator {
         }
     }
 
-    func cancelAll(reason: String) {
+    public func cancelAll(reason: String) {
         _ = interpreter.cancel()
         handleMouseAction(mouseState.cancel())
         cancelActive(reason: reason)
     }
 
-    func prepareForDeviceChange() {
+    public func prepareForDeviceChange() {
         cancelAll(reason: "simulator device changing")
         (sink as? DeviceAwareTouchSink)?.prepareForDeviceChange()
     }
@@ -78,13 +108,14 @@ final class GestureCoordinator {
         handleMouseAction(mouseState.cancel())
         cancelActive(reason: "raw gesture began")
         let fallback = mapper.simulatorPoint(fromNormalizedTouch: gesture.initialCentroid)
-        let anchor = AnchorPolicy.point(lastMousePoint).resolve(
+        let policy = anchorPolicy(fallback: fallback)
+        let anchor = policy.resolve(
             fallback: fallback,
             simulatorSize: mapper.simulatorSize
         )
         let transaction = TouchTransaction(
             source: .rawTrackpad,
-            intent: gesture.intent,
+            intent: mode == .edge ? .edge : gesture.intent,
             anchor: anchor,
             sink: sink
         )
@@ -163,11 +194,29 @@ final class GestureCoordinator {
     }
 
     private func navigationPoint(for gesture: InterpretedGesture, anchor: SimulatorPoint) -> SimulatorPoint {
-        let gain: CGFloat = 1.35
-        return mapper.clamped(SimulatorPoint(
+        let gain = InputTuning.stable.navigationGain
+        return SimulatorPoint(
             x: anchor.x + (gesture.centroid.x - gesture.initialCentroid.x) * mapper.simulatorSize.width * gain,
             y: anchor.y + (gesture.initialCentroid.y - gesture.centroid.y) * mapper.simulatorSize.height * gain
-        ))
+        )
+    }
+
+    public func capturePointForVirtualFinger() -> CapturePoint? {
+        virtualFingerPoint.flatMap(mapper.capturePoint(fromSimulator:))
+    }
+
+    private func anchorPolicy(fallback: SimulatorPoint) -> AnchorPolicy {
+        switch mode {
+        case .navigate:
+            return .navigate
+        case .point:
+            return .point(virtualFingerPoint ?? lastMousePoint)
+        case .edge:
+            let reference = virtualFingerPoint ?? fallback
+            return .edge(AnchorPolicy.nearestEdge(to: reference, simulatorSize: mapper.simulatorSize))
+        case .disabled:
+            return .navigate
+        }
     }
 
     private func initialPinchRadius(anchor: SimulatorPoint) -> CGFloat {
