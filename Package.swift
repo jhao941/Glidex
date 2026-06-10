@@ -43,7 +43,8 @@ let package = Package(
         ),
         .testTarget(
             name: "GlidexCoreTests",
-            dependencies: ["GlidexCore"]
+            dependencies: ["GlidexCore"],
+            resources: [.process("Fixtures")]
         ),
     ]
 )

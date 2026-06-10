@@ -15,6 +15,7 @@ public final class GestureCoordinator {
     public private(set) var mode: CaptureInputMode = .navigate
     public private(set) var virtualFingerPoint: SimulatorPoint?
     public var onStateChange: (() -> Void)?
+    public var inputStatus: String { activeTransaction == nil ? "idle" : "active" }
 
     public init(mapper: CoordinateMapper, sink: TouchSink, logger: Logger) {
         self.mapper = mapper
@@ -120,6 +121,7 @@ public final class GestureCoordinator {
             sink: sink
         )
         activeTransaction = transaction
+        onStateChange?()
 
         switch gesture.intent {
         case .navigate:
@@ -152,6 +154,7 @@ public final class GestureCoordinator {
         guard activeTransaction?.source == .rawTrackpad else { return }
         activeTransaction?.end()
         activeTransaction = nil
+        onStateChange?()
     }
 
     private func cancelActive(reason: String) {
@@ -160,6 +163,7 @@ public final class GestureCoordinator {
             logger.info("touch transaction cancelled gestureID=\(transaction.gestureID) reason=\(reason)")
         }
         activeTransaction = nil
+        onStateChange?()
     }
 
     private func handleMouseActions(_ actions: [MouseGestureAction]) {
@@ -177,6 +181,7 @@ public final class GestureCoordinator {
         case let .beginDrag(start, current):
             let transaction = makeMouseTransaction(anchor: start)
             activeTransaction = transaction
+            onStateChange?()
             transaction.begin(contacts: [TouchContactPoint(identifier: 0, point: start)])
             transaction.update(contacts: [TouchContactPoint(identifier: 0, point: current)])
         case let .updateDrag(point):
@@ -184,6 +189,7 @@ public final class GestureCoordinator {
         case let .endDrag(point):
             activeTransaction?.end(contacts: [TouchContactPoint(identifier: 0, point: point)])
             activeTransaction = nil
+            onStateChange?()
         case .cancelDrag:
             cancelActive(reason: "mouse drag cancelled")
         }

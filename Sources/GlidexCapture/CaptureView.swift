@@ -161,6 +161,13 @@ final class CaptureView: NSView {
 
     private func startRawTouchBackend() {
         guard !isRawTouchEnabled else { return }
+        if selectedTarget == nil {
+            guard let windowTarget = windowTracker.currentTarget(simulatorSize: calibration.simulatorSize),
+                  selectSimulatorTarget(for: windowTarget) else {
+                logger.error("capture raw touch backend requires an unambiguous Simulator target")
+                return
+            }
+        }
         coordinator.prepareForDeviceChange()
         do {
             let stream = MultitouchSupportRawTouchStream(logger: logger) { [weak self] frame in
@@ -354,7 +361,7 @@ final class CaptureView: NSView {
         drawCenteredLabel(detail, y: bounds.maxY - 64, fontSize: 12, weight: .regular)
         drawModeControls()
         let targetText = selectedTarget.map { "Target: \($0.name) [\($0.udid.prefix(8))]" } ?? "Target: not selected"
-        let inputText = "Input: \(coordinator.mode.rawValue) / \(isRawTouchEnabled ? "raw active" : "raw inactive")"
+        let inputText = "Input: \(coordinator.mode.rawValue) / \(coordinator.inputStatus) / \(isRawTouchEnabled ? "raw active" : "raw inactive")"
         drawCenteredLabel("\(targetText)   \(inputText)", y: bounds.minY + 18, fontSize: 11, weight: .medium)
     }
 

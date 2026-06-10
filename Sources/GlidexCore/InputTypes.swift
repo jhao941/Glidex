@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-public struct NormalizedTouchPoint: Equatable, Sendable {
+public struct NormalizedTouchPoint: Codable, Equatable, Sendable {
     public var x: CGFloat
     public var y: CGFloat
 
@@ -11,7 +11,7 @@ public struct NormalizedTouchPoint: Equatable, Sendable {
     }
 }
 
-public struct NormalizedTouchVector: Equatable, Sendable {
+public struct NormalizedTouchVector: Codable, Equatable, Sendable {
     public var x: CGFloat
     public var y: CGFloat
 
@@ -23,7 +23,7 @@ public struct NormalizedTouchVector: Equatable, Sendable {
     public static let zero = NormalizedTouchVector(x: 0, y: 0)
 }
 
-public struct CapturePoint: Equatable, Sendable {
+public struct CapturePoint: Codable, Equatable, Sendable {
     public var x: CGFloat
     public var y: CGFloat
 
@@ -89,7 +89,7 @@ public enum GestureIntent: String, Equatable, Sendable {
     case pinch
 }
 
-public enum CaptureInputMode: String, CaseIterable, Equatable, Sendable {
+public enum CaptureInputMode: String, Codable, CaseIterable, Equatable, Sendable {
     case navigate
     case point
     case edge

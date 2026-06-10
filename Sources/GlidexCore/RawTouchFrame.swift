@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-public struct RawTouchContact: Sendable {
+public struct RawTouchContact: Codable, Sendable {
     public let identifier: Int32
     public let state: Int32
     public let normalizedPosition: NormalizedTouchPoint
@@ -27,7 +27,7 @@ public struct RawTouchContact: Sendable {
     }
 }
 
-public struct RawTouchFrame: Sendable {
+public struct RawTouchFrame: Codable, Sendable {
     public let timestamp: Double
     public let frame: Int32
     public let contacts: [RawTouchContact]

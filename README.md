@@ -92,6 +92,8 @@ The capture window contains a calibration frame that maps local Mac window coord
 - click and drag -> live single-touch transaction
 - two-finger movement -> live navigation transaction
 - finger separation -> live two-contact pinch transaction
+- explicit Navigate, Point, Edge, and Disabled modes
+- a movable virtual-finger marker for Point and Edge anchoring
 - unlocked calibration mode: drag the frame to move it, drag the lower-right handle to resize it
 - `O`: attach the capture window to the currently visible Simulator window
 - `F`: toggle automatic follow for Simulator window moves/resizes
@@ -99,7 +101,7 @@ The capture window contains a calibration frame that maps local Mac window coord
 - `L`: lock/unlock calibration
 - `R`: reset calibration
 
-The default raw-touch path follows the stable behavior established by commit `eb4da18` (`Make raw touch the default capture path`). The cursor position is the preferred gesture anchor, with the trackpad centroid as fallback.
+The default raw-touch path follows the stable behavior established by commit `eb4da18` (`Make raw touch the default capture path`). Navigate uses the raw gesture centroid and is independent of mouse position. Point uses the explicitly moved virtual finger. Edge gestures are produced only in Edge mode and use the nearest edge to that marker.
 
 Input flows through explicit boundaries:
 
@@ -108,6 +110,8 @@ TouchSource -> GestureInterpreter -> AnchorPolicy -> TouchTransaction -> TouchSi
 ```
 
 The gesture interpreter, coordinate mapper, anchor policy, and transaction lifecycle are pure logic covered by Swift Testing. `CaptureView` owns AppKit responder events, drawing, and calibration. Mouse events use one responder path; there is no parallel local event monitor or timestamp-based deduplication.
+
+Raw-frame fixtures replay through the production `GestureCoordinator`; see [`docs/v1-input-validation.md`](docs/v1-input-validation.md) for the automated/manual validation boundary.
 
 ## Current status
 

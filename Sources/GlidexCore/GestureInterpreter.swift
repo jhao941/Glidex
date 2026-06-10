@@ -44,8 +44,11 @@ public struct GestureInterpreter: Sendable {
 
     private var state: State?
     private var lastFrameNumber: Int32?
+    private let tuning: InputTuning
 
-    public init() {}
+    public init(tuning: InputTuning = .stable) {
+        self.tuning = tuning
+    }
 
     public mutating func consume(_ frame: RawTouchFrame) -> GestureInterpreterOutput? {
         guard frame.frame != lastFrameNumber else { return nil }
@@ -83,7 +86,7 @@ public struct GestureInterpreter: Sendable {
         guard var current = state else { return nil }
         let isBeginning = current.intent == nil
         if current.intent == nil {
-            current.intent = Self.resolveIntent(
+            current.intent = resolveIntent(
                 state: current,
                 centroid: centroid,
                 distance: distance,
@@ -118,7 +121,7 @@ public struct GestureInterpreter: Sendable {
         }
     }
 
-    private static func resolveIntent(
+    private func resolveIntent(
         state: State,
         centroid: NormalizedTouchPoint,
         distance: CGFloat,
@@ -128,16 +131,16 @@ public struct GestureInterpreter: Sendable {
         let centroidDelta = state.initialCentroid.distance(to: centroid)
         let distanceDelta = abs(distance - state.initialDistance)
 
-        if distanceDelta >= 0.010 && distanceDelta > centroidDelta * 1.15 {
+        if distanceDelta >= tuning.pinchIntentThreshold && distanceDelta > centroidDelta * 1.15 {
             return .pinch
         }
-        if distanceDelta >= 0.018 {
+        if distanceDelta >= tuning.pinchFallbackThreshold {
             return .pinch
         }
-        if centroidDelta >= 0.010 && distanceDelta < centroidDelta * 1.2 {
+        if centroidDelta >= tuning.navigationIntentThreshold && distanceDelta < centroidDelta * 1.2 {
             return .navigate
         }
-        if elapsed >= 0.070 && centroidDelta >= 0.006 {
+        if elapsed >= tuning.navigationFallbackDelay && centroidDelta >= tuning.navigationFallbackThreshold {
             return .navigate
         }
         return nil
