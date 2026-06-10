@@ -7,6 +7,7 @@ final class AppController {
     private let preferences: GlidexPreferences
     private let state: GlidexAppState
     private let statusItemController: StatusItemController
+    private let overlayWindowController: OverlayWindowController
     private var stateObserver: UUID?
 
     init(logger: Logger) {
@@ -16,6 +17,7 @@ final class AppController {
             preferences: preferences.load()
         ))
         self.statusItemController = StatusItemController(state: state)
+        self.overlayWindowController = OverlayWindowController(state: state)
         configureCommands()
     }
 
