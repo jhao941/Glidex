@@ -6,7 +6,7 @@ import GlidexCore
 
 @MainActor
 final class SimulatorWindowTracker {
-    enum Lookup {
+    enum Lookup: Equatable {
         case none
         case target(Target)
         case ambiguous
@@ -32,8 +32,8 @@ final class SimulatorWindowTracker {
     private let logger: Logger
     private var timer: Timer?
     private var simulatorSize = CGSize.zero
-    private var onChange: ((Target) -> Void)?
-    private var lastTarget: Target?
+    private var onChange: ((Lookup) -> Void)?
+    private var lastLookup: Lookup?
     private var observer: AXObserver?
     private var observedWindow: AXUIElement?
 
@@ -73,16 +73,16 @@ final class SimulatorWindowTracker {
         ))
     }
 
-    func start(simulatorSize: CGSize, onChange: @escaping (Target) -> Void) {
+    func start(simulatorSize: CGSize, onChange: @escaping (Lookup) -> Void) {
         guard !isFollowing else { return }
         self.simulatorSize = simulatorSize
         self.onChange = onChange
         isFollowing = true
         poll()
-        if !startAXObserver() {
-            startPollingFallback()
-        }
-        logger.info("capture simulator follow enabled strategy=\(observer == nil ? "polling-fallback" : "ax-observer")")
+        guard isFollowing else { return }
+        let hasAXObserver = startAXObserver()
+        startPollingFallback()
+        logger.info("capture simulator follow enabled strategy=\(hasAXObserver ? "ax-observer+health-poll" : "polling-fallback")")
     }
 
     func stop() {
@@ -95,22 +95,25 @@ final class SimulatorWindowTracker {
         observer = nil
         observedWindow = nil
         onChange = nil
-        lastTarget = nil
+        lastLookup = nil
         isFollowing = false
         logger.info("capture simulator follow disabled")
     }
 
     private func poll() {
-        guard let target = currentTarget(simulatorSize: simulatorSize), target != lastTarget else { return }
-        lastTarget = target
-        onChange?(target)
+        let lookup = lookupTarget(simulatorSize: simulatorSize)
+        guard lookup != lastLookup else { return }
+        lastLookup = lookup
+        onChange?(lookup)
     }
 
     private func startAXObserver() -> Bool {
         guard let target = currentTarget(simulatorSize: simulatorSize), target.ownerPID != 0 else { return false }
         let appElement = AXUIElementCreateApplication(target.ownerPID)
         guard let windows: [AXUIElement] = Self.copyAXAttribute(appElement, kAXWindowsAttribute),
-              let window = windows.first else { return false }
+              let window = windows.min(by: {
+                  Self.frameDistance(Self.axFrame($0), target.frame) < Self.frameDistance(Self.axFrame($1), target.frame)
+              }) else { return false }
 
         var createdObserver: AXObserver?
         let result = AXObserverCreate(target.ownerPID, Self.observerCallback, &createdObserver)
@@ -120,6 +123,7 @@ final class SimulatorWindowTracker {
               AXObserverAddNotification(createdObserver, window, kAXResizedNotification as CFString, refcon) == .success else {
             return false
         }
+        _ = AXObserverAddNotification(createdObserver, window, kAXUIElementDestroyedNotification as CFString, refcon)
 
         observer = createdObserver
         observedWindow = window
@@ -147,7 +151,7 @@ final class SimulatorWindowTracker {
         simulatorSize: CGSize,
         windowFrame: CGRect
     ) -> CGRect? {
-        guard AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary) else {
+        guard AXIsProcessTrusted() else {
             return nil
         }
         guard let app = NSWorkspace.shared.runningApplications.first(where: {
@@ -227,7 +231,11 @@ final class SimulatorWindowTracker {
         guard frame.width < windowFrame.width * 0.98 || frame.height < windowFrame.height * 0.98 else { return nil }
         guard windowFrame.insetBy(dx: -2, dy: -2).contains(frame) else { return nil }
 
-        let aspectError = abs(frame.width / frame.height - targetAspect) / targetAspect
+        let frameAspect = frame.width / frame.height
+        let portraitError = abs(frameAspect - targetAspect) / targetAspect
+        let rotatedAspect = 1 / targetAspect
+        let landscapeError = abs(frameAspect - rotatedAspect) / rotatedAspect
+        let aspectError = min(portraitError, landscapeError)
         guard aspectError <= 0.18 else { return nil }
         let areaRatio = frame.width * frame.height / max(windowFrame.width * windowFrame.height, 1)
         guard areaRatio >= 0.25 else { return nil }
@@ -253,13 +261,25 @@ final class SimulatorWindowTracker {
     }
 
     private static func appKitFrame(from bounds: CGRect) -> CGRect {
-        let screenFrame = NSScreen.screens.first?.frame ?? .zero
-        return CGRect(
-            x: bounds.minX,
-            y: screenFrame.maxY - bounds.minY - bounds.height,
-            width: bounds.width,
-            height: bounds.height
-        )
+        DesktopCoordinateSpace(
+            mainDisplayHeight: CGDisplayBounds(CGMainDisplayID()).height
+        ).appKitFrame(fromQuartzTopLeft: bounds)
+    }
+
+    private static func axFrame(_ element: AXUIElement) -> CGRect? {
+        guard let positionValue: AXValue = copyAXAttribute(element, kAXPositionAttribute),
+              let sizeValue: AXValue = copyAXAttribute(element, kAXSizeAttribute) else { return nil }
+        var position = CGPoint.zero
+        var size = CGSize.zero
+        guard AXValueGetValue(positionValue, .cgPoint, &position),
+              AXValueGetValue(sizeValue, .cgSize, &size) else { return nil }
+        return appKitFrame(from: CGRect(origin: position, size: size))
+    }
+
+    private static func frameDistance(_ lhs: CGRect?, _ rhs: CGRect) -> CGFloat {
+        guard let lhs else { return .greatestFiniteMagnitude }
+        return abs(lhs.minX - rhs.minX) + abs(lhs.minY - rhs.minY) +
+            abs(lhs.width - rhs.width) + abs(lhs.height - rhs.height)
     }
 
     private static func copyAXAttribute<T>(_ element: AXUIElement, _ attribute: String) -> T? {

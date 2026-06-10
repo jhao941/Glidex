@@ -15,10 +15,17 @@ final class CaptureSession {
     private let windowTracker: SimulatorWindowTracker
 
     private var rawTouchStream: MultitouchSupportRawTouchStream?
+    private var rawStreamGeneration = 0
+    private var awaitsTouchRelease = false
     private var retryTimer: Timer?
     private var stateObserver: UUID?
     private var selectedTarget: SimulatorTarget?
+    private var nativeTarget: SimulatorTarget?
+    private var lastTrackedFrame: CGRect?
+    private var lastSimulatorPID: pid_t?
+    private var frameAdjustment = OverlayFrameAdjustment()
     private var lastEnabled: Bool
+    private var lastCalibrationMode: Bool
     private var isAttaching = false
     private var globalModifierMonitor: Any?
     private var localModifierMonitor: Any?
@@ -43,6 +50,7 @@ final class CaptureSession {
         )
         self.windowTracker = SimulatorWindowTracker(logger: logger)
         self.lastEnabled = state.snapshot.preferences.isEnabled
+        self.lastCalibrationMode = state.snapshot.isCalibrationMode
 
         configureCallbacks()
         stateObserver = state.observe { [weak self] snapshot in
@@ -93,7 +101,7 @@ final class CaptureSession {
             }
         }
         overlay.onCalibrationFrameChange = { [weak self] frame in
-            self?.updateMapper(captureSize: frame.size)
+            self?.finishCalibration(frame: frame)
         }
         coordinator.onStateChange = { [weak self] in
             guard let self else { return }
@@ -118,7 +126,10 @@ final class CaptureSession {
 
         let becameEnabled = snapshot.preferences.isEnabled && !lastEnabled
         let becameDisabled = !snapshot.preferences.isEnabled && lastEnabled
+        let enteredCalibration = snapshot.isCalibrationMode && !lastCalibrationMode
+        let exitedCalibration = !snapshot.isCalibrationMode && lastCalibrationMode
         lastEnabled = snapshot.preferences.isEnabled
+        lastCalibrationMode = snapshot.isCalibrationMode
 
         if becameDisabled {
             retryTimer?.invalidate()
@@ -126,6 +137,11 @@ final class CaptureSession {
             stopActiveInput(reason: "Glidex paused")
         } else if becameEnabled {
             attemptAttach(promptForAccessibility: true)
+        } else if enteredCalibration {
+            coordinator.cancelAll(reason: "calibration started")
+            windowTracker.stop()
+        } else if exitedCalibration {
+            resumeAfterCalibration()
         }
     }
 
@@ -139,6 +155,7 @@ final class CaptureSession {
             fail(.accessibilityPermission, retry: true)
             return
         }
+        installModifierMonitors()
 
         let lookup = windowTracker.lookupTarget(simulatorSize: Self.fallbackSimulatorSize.cgSize)
         let provisional: SimulatorWindowTracker.Target
@@ -184,14 +201,20 @@ final class CaptureSession {
                 return
             }
 
-            selectedTarget = target
-            updateMapper(captureSize: tracked.frame.size)
-            overlay.show(frame: tracked.frame)
+            nativeTarget = target
+            lastSimulatorPID = tracked.ownerPID
+            frameAdjustment = OverlayFrameAdjustment()
+            applyTrackedTarget(
+                tracked,
+                nativeTarget: target,
+                reason: "Simulator attached",
+                activate: false
+            )
             guard startRawTouchStream() else { return }
             startWindowTracking(for: target)
             retryTimer?.invalidate()
             retryTimer = nil
-            state.transition(to: .active, target: target)
+            state.transition(to: .active, target: selectedTarget)
             logger.info("capture session active target=\(target.name) udid=\(target.udid)")
         } catch {
             fail(.hidInitialization(String(describing: error)), retry: true)
@@ -200,15 +223,24 @@ final class CaptureSession {
 
     private func startRawTouchStream() -> Bool {
         guard rawTouchStream == nil else { return true }
+        rawStreamGeneration += 1
+        let generation = rawStreamGeneration
         let stream = MultitouchSupportRawTouchStream(logger: logger) { [weak self] frame in
             DispatchQueue.main.async {
-                guard self?.canInjectInput == true else { return }
-                self?.coordinator.handleRawFrame(frame)
+                guard let self,
+                      self.rawStreamGeneration == generation,
+                      self.canInjectInput else { return }
+                if self.awaitsTouchRelease {
+                    if frame.contacts.isEmpty { self.awaitsTouchRelease = false }
+                    return
+                }
+                self.coordinator.handleRawFrame(frame)
             }
         }
         do {
             try stream.start(source: .default, mode: 0)
             rawTouchStream = stream
+            awaitsTouchRelease = false
             return true
         } catch {
             fail(.multitouchUnavailable(String(describing: error)), retry: true)
@@ -218,31 +250,102 @@ final class CaptureSession {
 
     private func startWindowTracking(for target: SimulatorTarget) {
         windowTracker.stop()
-        windowTracker.start(simulatorSize: target.pointSize.cgSize) { [weak self] tracked in
-            guard let self, tracked.kind == .screen else { return }
-            if let title = tracked.windowTitle,
-               !title.localizedCaseInsensitiveContains(target.name) {
-                reattach()
-                return
-            }
-            guard !overlay.frame.isNearlyEqual(to: tracked.frame) else { return }
-            coordinator.cancelAll(reason: "Simulator window moved")
-            overlay.show(frame: tracked.frame)
-            updateMapper(captureSize: tracked.frame.size)
+        windowTracker.start(simulatorSize: target.pointSize.cgSize) { [weak self] lookup in
+            self?.handleTrackedLookup(lookup, expectedTarget: target)
         }
     }
 
-    private func updateMapper(captureSize: CGSize) {
-        let simulatorSize = selectedTarget?.pointSize ?? Self.fallbackSimulatorSize
-        coordinator.updateMapper(CoordinateMapper(
-            captureRect: CGRect(origin: .zero, size: captureSize),
-            simulatorSize: simulatorSize
-        ))
+    private func handleTrackedLookup(
+        _ lookup: SimulatorWindowTracker.Lookup,
+        expectedTarget: SimulatorTarget
+    ) {
+        switch lookup {
+        case .none:
+            wait(reason: "Simulator window closed")
+        case .ambiguous:
+            fail(.ambiguousTarget, retry: true)
+        case let .target(tracked):
+            guard tracked.kind == .screen else {
+                wait(reason: "Locating Simulator screen")
+                return
+            }
+            if let title = tracked.windowTitle,
+               !title.localizedCaseInsensitiveContains(expectedTarget.name) {
+                reattach()
+                return
+            }
+            if let lastSimulatorPID, tracked.ownerPID != lastSimulatorPID {
+                reattach()
+                return
+            }
+            guard !state.snapshot.isCalibrationMode else { return }
+            applyTrackedTarget(
+                tracked,
+                nativeTarget: expectedTarget,
+                reason: "Simulator geometry changed"
+            )
+        }
+    }
+
+    private func applyTrackedTarget(
+        _ tracked: SimulatorWindowTracker.Target,
+        nativeTarget: SimulatorTarget,
+        reason: String,
+        activate: Bool = true
+    ) {
+        let adjustedFrame = frameAdjustment.applying(to: tracked.frame)
+        let geometry = SimulatorDisplayGeometry(
+            desktopFrame: adjustedFrame,
+            nativeSimulatorSize: nativeTarget.pointSize
+        )
+        let orientedTarget = nativeTarget.withPointSize(geometry.simulatorSize)
+        guard selectedTarget != orientedTarget || !overlay.frame.isNearlyEqual(to: adjustedFrame) else {
+            lastTrackedFrame = tracked.frame
+            return
+        }
+
+        coordinator.cancelAll(reason: reason)
+        awaitsTouchRelease = true
+        selectedTarget = orientedTarget
+        lastTrackedFrame = tracked.frame
+        lastSimulatorPID = tracked.ownerPID
+        overlay.show(frame: geometry.desktopFrame)
+        coordinator.updateMapper(geometry.mapper)
+        if activate {
+            state.transition(to: .active, target: orientedTarget)
+        }
+        refreshOptionPreview()
+    }
+
+    private func finishCalibration(frame: CGRect) {
+        if let lastTrackedFrame {
+            frameAdjustment = OverlayFrameAdjustment(base: lastTrackedFrame, adjusted: frame)
+        }
+        guard let nativeTarget else { return }
+        let geometry = SimulatorDisplayGeometry(
+            desktopFrame: frame,
+            nativeSimulatorSize: nativeTarget.pointSize
+        )
+        selectedTarget = nativeTarget.withPointSize(geometry.simulatorSize)
+        coordinator.updateMapper(geometry.mapper)
+        state.transition(to: .active, target: selectedTarget)
+    }
+
+    private func resumeAfterCalibration() {
+        guard let nativeTarget else {
+            attemptAttach(promptForAccessibility: false)
+            return
+        }
+        finishCalibration(frame: overlay.frame)
+        startWindowTracking(for: nativeTarget)
     }
 
     private func wait(reason: String) {
         stopActiveInput(reason: reason)
         selectedTarget = nil
+        nativeTarget = nil
+        lastTrackedFrame = nil
+        lastSimulatorPID = nil
         overlay.hide()
         state.transition(to: .waiting(reason))
         scheduleRetry()
@@ -260,6 +363,8 @@ final class CaptureSession {
         overlay.updateVirtualFinger(coordinator.capturePointForVirtualFinger())
         rawTouchStream?.stop()
         rawTouchStream = nil
+        rawStreamGeneration += 1
+        awaitsTouchRelease = false
         windowTracker.stop()
     }
 
@@ -329,13 +434,16 @@ final class CaptureSession {
     }
 
     private func installModifierMonitors() {
-        guard globalModifierMonitor == nil, localModifierMonitor == nil else { return }
-        globalModifierMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.refreshOptionPreview() }
+        if globalModifierMonitor == nil {
+            globalModifierMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.refreshOptionPreview() }
+            }
         }
-        localModifierMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            self?.refreshOptionPreview()
-            return event
+        if localModifierMonitor == nil {
+            localModifierMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+                self?.refreshOptionPreview()
+                return event
+            }
         }
     }
 

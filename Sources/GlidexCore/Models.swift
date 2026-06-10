@@ -53,6 +53,16 @@ public struct SimulatorTarget: Equatable, Sendable {
         self.deviceType = deviceType
         self.pointSize = pointSize
     }
+
+    public func withPointSize(_ pointSize: SimulatorPointSize) -> SimulatorTarget {
+        SimulatorTarget(
+            name: name,
+            udid: udid,
+            runtime: runtime,
+            deviceType: deviceType,
+            pointSize: pointSize
+        )
+    }
 }
 
 struct ScreenMetrics {

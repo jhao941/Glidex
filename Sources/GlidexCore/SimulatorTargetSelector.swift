@@ -23,9 +23,11 @@ public enum SimulatorTargetSelector {
         from devices: [BootedSimulatorRecord],
         windowTitle: String?
     ) -> BootedSimulatorRecord? {
-        if let windowTitle,
-           let match = devices.first(where: { windowTitle.localizedCaseInsensitiveContains($0.name) }) {
-            return match
+        if let windowTitle {
+            let matches = devices.filter { windowTitle.localizedCaseInsensitiveContains($0.name) }
+            if matches.count == 1 {
+                return matches[0]
+            }
         }
         return devices.count == 1 ? devices.first : nil
     }

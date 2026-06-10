@@ -64,6 +64,23 @@ struct SimulatorTargetSelectorTests {
         }
     }
 
+    @Test("duplicate device names remain ambiguous")
+    func duplicateNamesAreAmbiguous() {
+        let devices = [
+            record(name: "iPhone 16 Pro", udid: "A"),
+            record(name: "iPhone 16 Pro", udid: "B"),
+        ]
+        let result = SimulatorTargetSelector.resolve(
+            from: devices,
+            hasVisibleWindow: true,
+            windowTitle: "iPhone 16 Pro - iOS 26.0"
+        )
+        guard case .ambiguous = result else {
+            Issue.record("Expected duplicate names to remain ambiguous")
+            return
+        }
+    }
+
     private func record(name: String, udid: String) -> BootedSimulatorRecord {
         BootedSimulatorRecord(
             name: name,
