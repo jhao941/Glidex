@@ -23,6 +23,47 @@ struct SimulatorTargetSelectorTests {
         #expect(SimulatorTargetSelector.select(from: devices, windowTitle: "Simulator") == nil)
     }
 
+    @Test("automatic attachment waits when Simulator is absent")
+    func unavailableAttachment() {
+        let result = SimulatorTargetSelector.resolve(
+            from: [],
+            hasVisibleWindow: false,
+            windowTitle: nil
+        )
+        guard case .unavailable = result else {
+            Issue.record("Expected unavailable selection")
+            return
+        }
+    }
+
+    @Test("automatic attachment selects the sole visible target")
+    func automaticAttachment() {
+        let result = SimulatorTargetSelector.resolve(
+            from: [record(name: "iPhone 16 Pro", udid: "A")],
+            hasVisibleWindow: true,
+            windowTitle: "iPhone 16 Pro"
+        )
+        guard case let .selected(device) = result else {
+            Issue.record("Expected selected target")
+            return
+        }
+        #expect(device.udid == "A")
+    }
+
+    @Test("automatic attachment reports ambiguity instead of choosing first")
+    func ambiguousAutomaticAttachment() {
+        let devices = [record(name: "iPhone 16 Pro", udid: "A"), record(name: "iPad Pro", udid: "B")]
+        let result = SimulatorTargetSelector.resolve(
+            from: devices,
+            hasVisibleWindow: true,
+            windowTitle: "Simulator"
+        )
+        guard case .ambiguous = result else {
+            Issue.record("Expected ambiguous selection")
+            return
+        }
+    }
+
     private func record(name: String, udid: String) -> BootedSimulatorRecord {
         BootedSimulatorRecord(
             name: name,

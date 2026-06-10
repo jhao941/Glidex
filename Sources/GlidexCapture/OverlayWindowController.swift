@@ -13,12 +13,15 @@ final class OverlayWindowController {
     private let captureView: CaptureView
     private var stateObserver: UUID?
     private var calibrationDrag: CalibrationDrag?
+    private var virtualFinger: CapturePoint?
+    private var acceptedInput = false
 
     var onInputDeactivated: (() -> Void)?
     var onMouseDown: ((CapturePoint) -> Void)?
     var onMouseDragged: ((CapturePoint) -> Void)?
     var onMouseUp: ((CapturePoint) -> Void)?
     var onMouseMoved: ((CapturePoint) -> Void)?
+    var onCalibrationFrameChange: ((CGRect) -> Void)?
 
     init(state: GlidexAppState) {
         self.state = state
@@ -48,7 +51,8 @@ final class OverlayWindowController {
     }
 
     func updateVirtualFinger(_ point: CapturePoint?) {
-        captureView.render(snapshot: state.snapshot, virtualFinger: point)
+        virtualFinger = point
+        captureView.render(snapshot: state.snapshot, virtualFinger: virtualFinger)
     }
 
     var frame: CGRect { window.frame }
@@ -89,6 +93,7 @@ final class OverlayWindowController {
             guard let self else { return }
             if state.snapshot.isCalibrationMode {
                 calibrationDrag = nil
+                onCalibrationFrameChange?(window.frame)
             } else {
                 onMouseUp?(point)
             }
@@ -100,13 +105,16 @@ final class OverlayWindowController {
 
     private func apply(_ snapshot: GlidexAppSnapshot) {
         let presentation = OverlayPresentation(snapshot: snapshot)
-        let wasAcceptingInput = !window.ignoresMouseEvents
-        if wasAcceptingInput && !presentation.acceptsInput {
+        if OverlayPresentation.requiresCancellation(
+            previouslyAcceptedInput: acceptedInput,
+            presentation: presentation
+        ) {
             onInputDeactivated?()
         }
+        acceptedInput = presentation.acceptsInput
         window.ignoresMouseEvents = !presentation.acceptsInput
         window.alphaValue = OverlayPresentation.windowAlpha
-        captureView.render(snapshot: snapshot, virtualFinger: nil)
+        captureView.render(snapshot: snapshot, virtualFinger: virtualFinger)
     }
 
     private func beginCalibration(at point: CapturePoint) {

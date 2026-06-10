@@ -8,6 +8,7 @@ struct GlidexCaptureMain {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
         let controller = AppController(logger: Logger())
+        app.delegate = controller
 
         app.finishLaunching()
         controller.start()

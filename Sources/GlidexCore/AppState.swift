@@ -135,35 +135,52 @@ public final class GlidexAppState {
     }
 
     public func setEnabled(_ enabled: Bool) {
-        snapshot.preferences.isEnabled = enabled
+        var next = snapshot
+        next.preferences.isEnabled = enabled
         if enabled {
-            if case .paused = snapshot.status {
-                snapshot.status = .waiting("Looking for Simulator")
+            if case .paused = next.status {
+                next.status = .waiting("Looking for Simulator")
             }
         } else {
-            snapshot.status = .paused
-            snapshot.isCalibrationMode = false
+            next.status = .paused
+            next.isCalibrationMode = false
         }
+        commit(next)
     }
 
     public func setInputMode(_ mode: CaptureInputMode) {
-        snapshot.preferences.inputMode = mode == .disabled ? .navigate : mode
+        var next = snapshot
+        next.preferences.inputMode = mode == .disabled ? .navigate : mode
+        commit(next)
     }
 
     public func setBorderVisibility(_ visibility: BorderVisibility) {
-        snapshot.preferences.borderVisibility = visibility
+        var next = snapshot
+        next.preferences.borderVisibility = visibility
+        commit(next)
     }
 
     public func setShowsTouchIndicator(_ shows: Bool) {
-        snapshot.preferences.showsTouchIndicator = shows
+        var next = snapshot
+        next.preferences.showsTouchIndicator = shows
+        commit(next)
     }
 
     public func setCalibrationMode(_ enabled: Bool) {
-        snapshot.isCalibrationMode = enabled
+        var next = snapshot
+        next.isCalibrationMode = enabled
+        commit(next)
     }
 
     public func transition(to status: GlidexRuntimeStatus, target: SimulatorTarget? = nil) {
-        snapshot.target = target
-        snapshot.status = snapshot.preferences.isEnabled ? status : .paused
+        var next = snapshot
+        next.target = target
+        next.status = next.preferences.isEnabled ? status : .paused
+        commit(next)
+    }
+
+    private func commit(_ next: GlidexAppSnapshot) {
+        guard next != snapshot else { return }
+        snapshot = next
     }
 }

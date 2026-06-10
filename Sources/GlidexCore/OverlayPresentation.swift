@@ -18,4 +18,11 @@ public struct OverlayPresentation: Equatable, Sendable {
         self.showsTouchIndicator = snapshot.preferences.showsTouchIndicator
         self.isCalibrationMode = snapshot.isCalibrationMode
     }
+
+    public static func requiresCancellation(
+        previouslyAcceptedInput: Bool,
+        presentation: OverlayPresentation
+    ) -> Bool {
+        previouslyAcceptedInput && !presentation.acceptsInput
+    }
 }

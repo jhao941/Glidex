@@ -6,6 +6,12 @@ import GlidexCore
 
 @MainActor
 final class SimulatorWindowTracker {
+    enum Lookup {
+        case none
+        case target(Target)
+        case ambiguous
+    }
+
     struct Target: Equatable {
         enum Kind: Equatable {
             case screen
@@ -38,13 +44,33 @@ final class SimulatorWindowTracker {
     }
 
     func currentTarget(simulatorSize: CGSize) -> Target? {
-        if let frame = Self.findSimulatorScreenFrame(simulatorSize: simulatorSize) {
-            let window = Self.findSimulatorWindow()
-            return Target(frame: frame, kind: .screen, windowTitle: window?.title, ownerPID: window?.pid ?? 0)
+        guard case let .target(target) = lookupTarget(simulatorSize: simulatorSize) else {
+            return nil
         }
-        return Self.findSimulatorWindow().map {
-            Target(frame: $0.frame, kind: .window, windowTitle: $0.title, ownerPID: $0.pid)
+        return target
+    }
+
+    func lookupTarget(simulatorSize: CGSize) -> Lookup {
+        let windows = Self.findSimulatorWindows()
+        guard !windows.isEmpty else { return .none }
+        guard windows.count == 1, let window = windows.first else { return .ambiguous }
+        if let frame = Self.findSimulatorScreenFrame(
+            simulatorSize: simulatorSize,
+            windowFrame: window.frame
+        ) {
+            return .target(Target(
+                frame: frame,
+                kind: .screen,
+                windowTitle: window.title,
+                ownerPID: window.pid
+            ))
         }
+        return .target(Target(
+            frame: window.frame,
+            kind: .window,
+            windowTitle: window.title,
+            ownerPID: window.pid
+        ))
     }
 
     func start(simulatorSize: CGSize, onChange: @escaping (Target) -> Void) {
@@ -117,13 +143,16 @@ final class SimulatorWindowTracker {
         }
     }
 
-    private static func findSimulatorScreenFrame(simulatorSize: CGSize) -> CGRect? {
+    private static func findSimulatorScreenFrame(
+        simulatorSize: CGSize,
+        windowFrame: CGRect
+    ) -> CGRect? {
         guard AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary) else {
             return nil
         }
         guard let app = NSWorkspace.shared.runningApplications.first(where: {
             $0.bundleIdentifier == "com.apple.iphonesimulator"
-        }), let windowFrame = findSimulatorWindow()?.frame else {
+        }) else {
             return nil
         }
 
@@ -146,21 +175,22 @@ final class SimulatorWindowTracker {
         return candidates.max(by: { $0.score < $1.score })?.frame
     }
 
-    private static func findSimulatorWindow() -> (frame: CGRect, title: String?, pid: pid_t)? {
+    private static func findSimulatorWindows() -> [(frame: CGRect, title: String?, pid: pid_t)] {
         let options = CGWindowListOption(arrayLiteral: .optionOnScreenOnly, .excludeDesktopElements)
         guard let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
-            return nil
+            return []
         }
 
-        for window in windows where window[kCGWindowOwnerName as String] as? String == "Simulator" {
+        return windows.compactMap { window in
+            guard window[kCGWindowOwnerName as String] as? String == "Simulator" else { return nil }
             guard let bounds = window[kCGWindowBounds as String] as? [String: CGFloat],
                   let x = bounds["X"], let y = bounds["Y"],
-                  let width = bounds["Width"], let height = bounds["Height"] else { continue }
+                  let width = bounds["Width"], let height = bounds["Height"],
+                  width >= 180, height >= 320 else { return nil }
             let title = window[kCGWindowName as String] as? String
             let pid = (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value ?? 0
             return (appKitFrame(from: CGRect(x: x, y: y, width: width, height: height)), title, pid)
         }
-        return nil
     }
 
     private static func collectScreenCandidates(

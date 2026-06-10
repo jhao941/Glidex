@@ -1,6 +1,6 @@
 # Glidex
 
-Glidex is a macOS capture app and reusable Swift core for operating a booted iPhone Simulator from Mac input. It dynamically loads the same broad private-framework stack historically proven by Facebook's FBSimulatorControl and idb work: CoreSimulator device discovery, SimulatorKit's legacy HID client, and Indigo digitizer messages. Glidex does not depend on idb directly; that project is the architectural reference and prior art for this technical path.
+Glidex is a quiet macOS menu bar app and reusable Swift core for operating a booted iPhone Simulator from Mac input. It dynamically loads the same broad private-framework stack historically proven by Facebook's FBSimulatorControl and idb work: CoreSimulator device discovery, SimulatorKit's legacy HID client, and Indigo digitizer messages. Glidex does not depend on idb directly; that project is the architectural reference and prior art for this technical path.
 
 Current scope:
 
@@ -11,12 +11,13 @@ Current scope:
 - capture raw trackpad frames through MultitouchSupport
 - map mouse and two-finger trackpad input through a testable transaction pipeline
 - attach and follow the visible Simulator screen region through CGWindow and Accessibility APIs
+- run as an accessory app with a transparent, border-only input overlay
+- persist enablement, input mode, border visibility, and touch-indicator preferences
 
 Current non-goals:
 
-- no menu bar app
 - no public/private-API compatibility guarantee across macOS and Xcode releases
-- no complete product UI, onboarding, signing, or distribution workflow
+- no complete onboarding, signing, or distribution workflow
 - no guarantee yet for every device orientation, display scale, or multiple simultaneously booted simulators
 
 ## Layout
@@ -38,8 +39,11 @@ Current non-goals:
     │   └── ...
     ├── GlidexCapture
     │   ├── AppMain.swift
+    │   ├── AppController.swift
+    │   ├── CaptureSession.swift
     │   ├── CaptureView.swift
-    │   ├── GestureCoordinator.swift
+    │   ├── OverlayWindowController.swift
+    │   ├── StatusItemController.swift
     │   └── SimulatorWindowTracker.swift
     └── glidexCLI
         ├── CLI.swift
@@ -57,8 +61,10 @@ Key files:
 - `Sources/GlidexCore/GestureInterpreter.swift`: pure raw-frame gesture state machine
 - `Sources/GlidexCore/TouchTransaction.swift`: begin/update/end/cancel lifecycle and injectable `TouchSink`
 - `Sources/GlidexCore/RawTouchStream.swift`: formal raw trackpad stream above isolated MultitouchSupport ABI bindings
-- `Sources/GlidexCapture/CaptureView.swift`: drawing, calibration, and AppKit responder entry points
-- `Sources/GlidexCapture/GestureCoordinator.swift`: input arbitration, anchor selection, coordinate mapping, and transaction ownership
+- `Sources/GlidexCore/GestureCoordinator.swift`: input arbitration, anchor selection, coordinate mapping, and transaction ownership
+- `Sources/GlidexCapture/CaptureSession.swift`: automatic attachment, raw stream lifetime, error recovery, and coordinator wiring
+- `Sources/GlidexCapture/OverlayWindowController.swift`: transparent window geometry, passthrough, and calibration
+- `Sources/GlidexCapture/CaptureView.swift`: border/touch-indicator drawing and AppKit responder entry points
 - `Sources/GlidexCapture/SimulatorWindowTracker.swift`: Simulator window and screen-region tracking
 - `Sources/CGlidexShim/*`: tiny C shim for Objective-C runtime method enumeration and message construction helpers
 
@@ -87,19 +93,25 @@ swift run glidex pinch --center 200,400 --scale 0.8 --duration 0.5
 swift run glidex-capture
 ```
 
-The capture window contains a calibration frame that maps local Mac window coordinates into simulator points. It defaults to a 402 x 874 simulator-point mapping, matching the observed iPhone 16 Pro logical screen size. It supports:
+Glidex starts as an accessory app with no Dock icon and no debug window. When Accessibility permission is available, it finds an unambiguous visible Simulator, resolves the matching booted device, and places a transparent overlay exactly over the simulated screen region. If Simulator is absent it waits; if multiple candidates cannot be matched it reports an error instead of choosing the first one.
+
+The menu bar controls provide:
+
+- enable/pause with safe input passthrough
+- Navigate, Point, and Edge modes (Navigate is the default)
+- Hidden, Subtle, Normal, and Strong border visibility
+- optional touch indicator
+- reattach, calibration, diagnostics, settings, and quit actions
+
+The overlay supports:
 
 - click and drag -> live single-touch transaction
 - two-finger movement -> live navigation transaction
 - finger separation -> live two-contact pinch transaction
-- explicit Navigate, Point, Edge, and Disabled modes
 - a movable virtual-finger marker for Point and Edge anchoring
-- unlocked calibration mode: drag the frame to move it, drag the lower-right handle to resize it
-- `O`: attach the capture window to the currently visible Simulator window
-- `F`: toggle automatic follow for Simulator window moves/resizes
-- `T`: toggle translucent overlay mode
-- `L`: lock/unlock calibration
-- `R`: reset calibration
+- calibration mode: drag the overlay to move it or drag its lower-right corner to resize it
+
+The window itself always remains fully opaque at the compositor level (`alphaValue = 1`). Only the inset border is drawn, so lowering border visibility never makes Simulator content dim or washed out. Paused and error states cancel active transactions before enabling click-through.
 
 The default raw-touch path follows the stable behavior established by commit `eb4da18` (`Make raw touch the default capture path`). Navigate uses the raw gesture centroid and is independent of mouse position. Point uses the explicitly moved virtual finger. Edge gestures are produced only in Edge mode and use the nearest edge to that marker.
 
@@ -109,7 +121,7 @@ Input flows through explicit boundaries:
 TouchSource -> GestureInterpreter -> AnchorPolicy -> TouchTransaction -> TouchSink
 ```
 
-The gesture interpreter, coordinate mapper, anchor policy, and transaction lifecycle are pure logic covered by Swift Testing. `CaptureView` owns AppKit responder events, drawing, and calibration. Mouse events use one responder path; there is no parallel local event monitor or timestamp-based deduplication.
+The gesture interpreter, coordinate mapper, anchor policy, overlay policy, target selection, and transaction lifecycle are pure logic covered by Swift Testing. `CaptureView` owns only AppKit responder events and drawing. Mouse events use one responder path; there is no parallel local event monitor or timestamp-based deduplication.
 
 Raw-frame fixtures replay through the production `GestureCoordinator`; see [`docs/v1-input-validation.md`](docs/v1-input-validation.md) for the automated/manual validation boundary.
 
@@ -138,10 +150,12 @@ What is implemented:
     - handcrafted digitizer `IndigoHIDMessageStruct` frames
     - `sendWithMessage:freeWhenDone:completionQueue:completion:`
 - the capture app
+  - runs from the menu bar as an accessory application
+  - automatically attaches to one unambiguous visible Simulator screen
   - consumes MultitouchSupport raw frames through `RawTouchStream`
   - injects through an `IndigoTouchSink`
   - emits structured touch lifecycle logs containing gesture ID, source, intent, anchor, phase, and contacts
-  - releases active transactions on cancel, capture shutdown, raw-stream stop, and window focus loss
+  - releases active transactions before pause, error passthrough, target change, raw-stream stop, and shutdown
 
 What is not yet verified:
 
@@ -156,7 +170,7 @@ Most likely backend candidates, in order:
 
 1. `SimServiceContext -> SimDeviceSet -> SimDevice -> SimDeviceLegacyHIDClient(device:)`
 2. handcrafted digitizer / touch `IndigoHIDMessageStruct` frames sent through the HID client
-3. for future UI mirroring, a macOS overlay should collect trackpad gestures and call a reusable injection core directly
+3. the macOS overlay collects trackpad gestures and calls the reusable injection core directly
 
 Observed on this machine during LLDB-assisted probing:
 
@@ -252,4 +266,4 @@ Useful LLDB ideas:
 
 ## Next architecture checkpoint
 
-The next product-facing work can build on `TouchSource`, `AnchorPolicy`, and `TouchSink` without moving private ABI code into the UI layer. Likely integration points are active-device screen metrics, explicit device-change notifications that cancel the current transaction, and product UI for selecting Navigate, Point, or Edge anchor behavior.
+The next product-facing work can build on `GlidexAppState`, `CaptureSession`, `TouchSource`, `AnchorPolicy`, and `TouchSink` without moving private ABI code into the UI layer. Likely integration points are orientation-aware screen metrics, a first-run permission flow, explicit target selection for genuinely ambiguous multi-window setups, and signed app packaging.

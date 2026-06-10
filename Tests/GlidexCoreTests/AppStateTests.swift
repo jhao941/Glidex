@@ -36,4 +36,16 @@ struct AppStateTests {
         state.transition(to: .error(.ambiguousTarget))
         #expect(state.snapshot.status == .error(.ambiguousTarget))
     }
+
+    @Test("identical state changes are not rebroadcast")
+    func identicalStateIsQuiet() {
+        let state = GlidexAppState()
+        var observations = 0
+        _ = state.observe { _ in observations += 1 }
+
+        state.transition(to: .waiting("Looking for Simulator"))
+        state.setInputMode(.navigate)
+
+        #expect(observations == 1)
+    }
 }

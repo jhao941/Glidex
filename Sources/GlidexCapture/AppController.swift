@@ -2,12 +2,13 @@ import AppKit
 import GlidexCore
 
 @MainActor
-final class AppController {
+final class AppController: NSObject, NSApplicationDelegate {
     private let logger: Logger
     private let preferences: GlidexPreferences
     private let state: GlidexAppState
     private let statusItemController: StatusItemController
     private let overlayWindowController: OverlayWindowController
+    private var captureSession: CaptureSession?
     private var stateObserver: UUID?
 
     init(logger: Logger) {
@@ -18,14 +19,32 @@ final class AppController {
         ))
         self.statusItemController = StatusItemController(state: state)
         self.overlayWindowController = OverlayWindowController(state: state)
+        super.init()
+        do {
+            self.captureSession = try CaptureSession(
+                logger: logger,
+                state: state,
+                overlay: overlayWindowController
+            )
+        } catch {
+            state.transition(to: .error(.hidInitialization(String(describing: error))))
+        }
         configureCommands()
     }
 
     func start() {
         stateObserver = state.observe { [weak self] snapshot in
             self?.preferences.save(snapshot.preferences)
+            self?.logger.info(
+                "app status=\(snapshot.status.title) enabled=\(snapshot.preferences.isEnabled) mode=\(snapshot.preferences.inputMode.rawValue) target=\(snapshot.target?.udid ?? "none")"
+            )
         }
+        captureSession?.start()
         logger.info("Glidex menu bar app ready")
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        captureSession?.shutdown()
     }
 
     private func configureCommands() {
@@ -44,8 +63,8 @@ final class AppController {
         statusItemController.onSetCalibrationMode = { [weak state] enabled in
             state?.setCalibrationMode(enabled)
         }
-        statusItemController.onReattach = { [weak state] in
-            state?.transition(to: .waiting("Reattaching to Simulator"))
+        statusItemController.onReattach = { [weak self] in
+            self?.captureSession?.reattach()
         }
         statusItemController.onDiagnostics = { [weak self] in
             self?.showInformation(
@@ -59,7 +78,8 @@ final class AppController {
                 message: "Use the menu bar controls to configure input mode, border visibility, and touch indicators."
             )
         }
-        statusItemController.onQuit = {
+        statusItemController.onQuit = { [weak self] in
+            self?.captureSession?.shutdown()
             NSApp.terminate(nil)
         }
     }
@@ -70,10 +90,27 @@ final class AppController {
         let detail: String
         switch snapshot.status {
         case let .waiting(reason): detail = reason
-        case let .error(error): detail = error.message
+        case let .error(error): detail = "\(error.message)\n\(recoveryMessage(for: error))"
         default: detail = snapshot.status.title
         }
         return "Status: \(detail)\nTarget: \(target)\nMode: \(snapshot.preferences.inputMode.rawValue)"
+    }
+
+    private func recoveryMessage(for error: GlidexRuntimeError) -> String {
+        switch error {
+        case .accessibilityPermission:
+            "Allow Glidex under System Settings > Privacy & Security > Accessibility, then choose Reattach to Simulator."
+        case .simulatorNotRunning:
+            "Boot and show one Simulator device, then choose Reattach to Simulator."
+        case .ambiguousTarget:
+            "Leave one Simulator window visible or close unrelated Simulator windows, then reattach."
+        case .multitouchUnavailable:
+            "Reconnect the trackpad or restart Glidex. Diagnostics remain available from the CLI."
+        case .hidInitialization:
+            "Restart Simulator and Glidex. If the issue persists, run glidex probe from Terminal."
+        case .other:
+            "Choose Reattach to Simulator. If the issue persists, run glidex probe from Terminal."
+        }
     }
 
     private func showInformation(title: String, message: String) {

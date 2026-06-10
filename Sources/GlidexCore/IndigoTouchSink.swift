@@ -11,6 +11,7 @@ public final class IndigoTouchSink: DeviceAwareTouchSink {
     private var sessions: [UUID: ActiveSession] = [:]
     private var reusableSingleSession: LiveTouchSession?
     private var reusableTwoFingerSession: LiveTwoFingerTouchSession?
+    public var onError: (@Sendable (String) -> Void)?
 
     public init(injector: SimulatorInjector, logger: Logger) {
         self.injector = injector
@@ -72,6 +73,7 @@ public final class IndigoTouchSink: DeviceAwareTouchSink {
             }
         } catch {
             logger.error("touch sink begin failed gestureID=\(snapshot.gestureID): \(error)")
+            onError?(String(describing: error))
         }
     }
 

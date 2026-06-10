@@ -38,4 +38,27 @@ struct OverlayPresentationTests {
 
         #expect(presentation.acceptsInput)
     }
+
+    @Test("leaving active input requires transaction cancellation")
+    func deactivationRequiresCancellation() {
+        let paused = OverlayPresentation(snapshot: GlidexAppSnapshot(
+            preferences: GlidexPreferenceValues(isEnabled: false)
+        ))
+        let failed = OverlayPresentation(snapshot: GlidexAppSnapshot(
+            status: .error(.multitouchUnavailable("test"))
+        ))
+
+        #expect(OverlayPresentation.requiresCancellation(
+            previouslyAcceptedInput: true,
+            presentation: paused
+        ))
+        #expect(OverlayPresentation.requiresCancellation(
+            previouslyAcceptedInput: true,
+            presentation: failed
+        ))
+        #expect(!OverlayPresentation.requiresCancellation(
+            previouslyAcceptedInput: false,
+            presentation: failed
+        ))
+    }
 }
