@@ -20,6 +20,7 @@ struct CoordinateMapperTests {
     func outsideCaptureBounds() {
         #expect(mapper.simulatorPoint(fromCapture: CapturePoint(x: 9, y: 220)) == nil)
         #expect(mapper.simulatorPoint(fromCapture: CapturePoint(x: 210, y: 420)) == nil)
+        #expect(mapper.projectedSimulatorPoint(fromCapture: CapturePoint(x: 310, y: 220)) == SimulatorPoint(x: 600, y: 400))
     }
 
     @Test("raw normalized coordinates are clamped")

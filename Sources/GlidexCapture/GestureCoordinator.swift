@@ -8,6 +8,7 @@ final class GestureCoordinator {
 
     private var mapper: CoordinateMapper
     private var interpreter = GestureInterpreter()
+    private var mouseState = MouseGestureStateMachine()
     private var activeTransaction: TouchTransaction?
     private var lastMousePoint: SimulatorPoint?
     private var pinchInitialRadius: CGFloat = 72
@@ -32,33 +33,20 @@ final class GestureCoordinator {
         cancelActive(reason: "mouse input began")
         guard let simulatorPoint = mapper.simulatorPoint(fromCapture: point) else { return }
         lastMousePoint = simulatorPoint
-        let transaction = TouchTransaction(
-            source: .mouse,
-            intent: .point,
-            anchor: simulatorPoint,
-            sink: sink
-        )
-        activeTransaction = transaction
-        transaction.begin(contacts: [TouchContactPoint(identifier: 0, point: simulatorPoint)])
+        handleMouseActions(mouseState.mouseDown(capture: point, simulator: simulatorPoint))
     }
 
     func updateMouse(at point: CapturePoint) {
-        guard let simulatorPoint = mapper.simulatorPoint(fromCapture: point) else {
-            cancelActive(reason: "mouse left capture bounds")
-            return
-        }
-        lastMousePoint = simulatorPoint
-        guard activeTransaction?.source == .mouse else { return }
-        activeTransaction?.update(contacts: [TouchContactPoint(identifier: 0, point: simulatorPoint)])
+        guard let simulatorPoint = mapper.projectedSimulatorPoint(fromCapture: point) else { return }
+        handleMouseActions(mouseState.mouseDragged(capture: point, simulator: simulatorPoint))
     }
 
     func endMouse(at point: CapturePoint?) {
-        guard activeTransaction?.source == .mouse else { return }
-        let contacts = point
-            .flatMap(mapper.simulatorPoint(fromCapture:))
-            .map { [TouchContactPoint(identifier: 0, point: $0)] }
-        activeTransaction?.end(contacts: contacts)
-        activeTransaction = nil
+        guard let point, let simulatorPoint = mapper.projectedSimulatorPoint(fromCapture: point) else {
+            handleMouseAction(mouseState.cancel())
+            return
+        }
+        handleMouseActions(mouseState.mouseUp(capture: point, simulator: simulatorPoint))
     }
 
     func handleRawFrame(_ frame: RawTouchFrame) {
@@ -77,6 +65,7 @@ final class GestureCoordinator {
 
     func cancelAll(reason: String) {
         _ = interpreter.cancel()
+        handleMouseAction(mouseState.cancel())
         cancelActive(reason: reason)
     }
 
@@ -86,6 +75,7 @@ final class GestureCoordinator {
     }
 
     private func beginRawGesture(_ gesture: InterpretedGesture) {
+        handleMouseAction(mouseState.cancel())
         cancelActive(reason: "raw gesture began")
         let fallback = mapper.simulatorPoint(fromNormalizedTouch: gesture.initialCentroid)
         let anchor = AnchorPolicy.point(lastMousePoint).resolve(
@@ -139,6 +129,37 @@ final class GestureCoordinator {
             logger.info("touch transaction cancelled gestureID=\(transaction.gestureID) reason=\(reason)")
         }
         activeTransaction = nil
+    }
+
+    private func handleMouseActions(_ actions: [MouseGestureAction]) {
+        for action in actions { handleMouseAction(action) }
+    }
+
+    private func handleMouseAction(_ action: MouseGestureAction?) {
+        guard let action else { return }
+        switch action {
+        case let .tap(point):
+            let transaction = makeMouseTransaction(anchor: point)
+            let contact = [TouchContactPoint(identifier: 0, point: point)]
+            transaction.begin(contacts: contact)
+            transaction.end(contacts: contact)
+        case let .beginDrag(start, current):
+            let transaction = makeMouseTransaction(anchor: start)
+            activeTransaction = transaction
+            transaction.begin(contacts: [TouchContactPoint(identifier: 0, point: start)])
+            transaction.update(contacts: [TouchContactPoint(identifier: 0, point: current)])
+        case let .updateDrag(point):
+            activeTransaction?.update(contacts: [TouchContactPoint(identifier: 0, point: point)])
+        case let .endDrag(point):
+            activeTransaction?.end(contacts: [TouchContactPoint(identifier: 0, point: point)])
+            activeTransaction = nil
+        case .cancelDrag:
+            cancelActive(reason: "mouse drag cancelled")
+        }
+    }
+
+    private func makeMouseTransaction(anchor: SimulatorPoint) -> TouchTransaction {
+        TouchTransaction(source: .mouse, intent: .point, anchor: anchor, sink: sink)
     }
 
     private func navigationPoint(for gesture: InterpretedGesture, anchor: SimulatorPoint) -> SimulatorPoint {

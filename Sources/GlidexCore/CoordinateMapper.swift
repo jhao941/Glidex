@@ -15,12 +15,18 @@ public struct CoordinateMapper: Equatable, Sendable {
             return nil
         }
 
+        return projectedSimulatorPoint(fromCapture: point)
+    }
+
+    public func projectedSimulatorPoint(fromCapture point: CapturePoint) -> SimulatorPoint? {
+        guard captureRect.width > 0, captureRect.height > 0 else { return nil }
+
         let normalizedX = (point.x - captureRect.minX) / captureRect.width
         let normalizedYFromTop = (captureRect.maxY - point.y) / captureRect.height
-        return clamped(SimulatorPoint(
+        return SimulatorPoint(
             x: normalizedX * simulatorSize.width,
             y: normalizedYFromTop * simulatorSize.height
-        ))
+        )
     }
 
     public func simulatorPoint(fromNormalizedTouch point: NormalizedTouchPoint) -> SimulatorPoint {

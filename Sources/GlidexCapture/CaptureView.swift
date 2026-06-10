@@ -17,7 +17,6 @@ final class CaptureView: NSView {
     weak var hostWindow: NSWindow?
     private var calibration = CalibrationState.defaultState
     private var calibrationDragMode: CalibrationDragMode?
-    private var pendingMouseDownPoint: CGPoint?
     private var isOverlayMode = false
     private var rawTouchStream: MultitouchSupportRawTouchStream?
     private var isRawTouchEnabled = false
@@ -110,7 +109,6 @@ final class CaptureView: NSView {
             beginCalibrationDrag(at: point)
             return
         }
-        pendingMouseDownPoint = point
         coordinator.beginMouse(at: CapturePoint(point))
     }
 
@@ -121,7 +119,6 @@ final class CaptureView: NSView {
             updateCalibrationDrag(to: point)
             return
         }
-        guard let start = pendingMouseDownPoint, start.distance(to: point) >= 3 else { return }
         coordinator.updateMouse(at: CapturePoint(point))
     }
 
@@ -133,7 +130,6 @@ final class CaptureView: NSView {
             return
         }
         coordinator.endMouse(at: CapturePoint(point))
-        pendingMouseDownPoint = nil
     }
 
     override func mouseMoved(with event: NSEvent) {
@@ -141,7 +137,6 @@ final class CaptureView: NSView {
     }
 
     func cancelInput(reason: String) {
-        pendingMouseDownPoint = nil
         coordinator.cancelAll(reason: reason)
     }
 
@@ -395,11 +390,5 @@ private extension CGRect {
             abs(minY - other.minY) <= tolerance &&
             abs(width - other.width) <= tolerance &&
             abs(height - other.height) <= tolerance
-    }
-}
-
-private extension CGPoint {
-    func distance(to other: CGPoint) -> CGFloat {
-        hypot(x - other.x, y - other.y)
     }
 }
