@@ -20,6 +20,8 @@ final class CaptureSession {
     private var selectedTarget: SimulatorTarget?
     private var lastEnabled: Bool
     private var isAttaching = false
+    private var globalModifierMonitor: Any?
+    private var localModifierMonitor: Any?
 
     init(
         logger: Logger,
@@ -49,6 +51,7 @@ final class CaptureSession {
     }
 
     func start() {
+        installModifierMonitors()
         guard state.snapshot.preferences.isEnabled else { return }
         attemptAttach(promptForAccessibility: true)
     }
@@ -62,6 +65,7 @@ final class CaptureSession {
     func shutdown() {
         retryTimer?.invalidate()
         retryTimer = nil
+        removeModifierMonitors()
         stopActiveInput(reason: "application shutdown")
         overlay.hide()
     }
@@ -83,14 +87,19 @@ final class CaptureSession {
             self?.coordinator.endMouse(at: point)
         }
         overlay.onMouseMoved = { [weak self] point in
-            guard self?.canInjectInput == true else { return }
-            self?.coordinator.updatePointer(point)
+            guard let self, canInjectInput else { return }
+            if isOptionPressed {
+                refreshOptionPreview()
+            }
         }
         overlay.onCalibrationFrameChange = { [weak self] frame in
             self?.updateMapper(captureSize: frame.size)
         }
         coordinator.onStateChange = { [weak self] in
             guard let self else { return }
+            if case .available = state.snapshot.optionAnchorAvailability {
+                return
+            }
             overlay.updateVirtualFinger(coordinator.capturePointForVirtualFinger())
         }
         sink.onError = { [weak self] message in
@@ -98,10 +107,14 @@ final class CaptureSession {
                 self?.fail(.hidInitialization(message))
             }
         }
+        coordinator.setRawGestureInputProvider { [weak self] in
+            self?.currentRawGestureInputSample() ?? .none
+        }
     }
 
     private func apply(_ snapshot: GlidexAppSnapshot) {
         coordinator.setMode(snapshot.preferences.inputMode)
+        refreshOptionPreview()
 
         let becameEnabled = snapshot.preferences.isEnabled && !lastEnabled
         let becameDisabled = !snapshot.preferences.isEnabled && lastEnabled
@@ -243,6 +256,8 @@ final class CaptureSession {
 
     private func stopActiveInput(reason: String) {
         coordinator.cancelAll(reason: reason)
+        state.setOptionAnchorAvailability(.inactive)
+        overlay.updateVirtualFinger(coordinator.capturePointForVirtualFinger())
         rawTouchStream?.stop()
         rawTouchStream = nil
         windowTracker.stop()
@@ -263,6 +278,76 @@ final class CaptureSession {
         state.snapshot.preferences.isEnabled &&
             state.snapshot.status == .active &&
             !state.snapshot.isCalibrationMode
+    }
+
+    private var isOptionPressed: Bool {
+        CGEventSource.flagsState(.combinedSessionState).contains(.maskAlternate)
+    }
+
+    private func currentRawGestureInputSample() -> GestureInputSample {
+        let desktopPoint = DesktopPoint(NSEvent.mouseLocation)
+        let capturePoint = overlay.capturePoint(fromDesktop: desktopPoint)
+        let optionPressed = isOptionPressed
+        updateOptionPreview(
+            optionPressed: optionPressed,
+            capturePoint: capturePoint
+        )
+        return GestureInputSample(
+            optionPressed: optionPressed,
+            globalMouseLocation: desktopPoint,
+            captureMouseLocation: capturePoint
+        )
+    }
+
+    private func refreshOptionPreview() {
+        guard state.snapshot.preferences.inputMode == .navigate, canInjectInput else {
+            state.setOptionAnchorAvailability(.inactive)
+            overlay.updateVirtualFinger(coordinator.capturePointForVirtualFinger())
+            return
+        }
+        let desktopPoint = DesktopPoint(NSEvent.mouseLocation)
+        updateOptionPreview(
+            optionPressed: isOptionPressed,
+            capturePoint: overlay.capturePoint(fromDesktop: desktopPoint)
+        )
+    }
+
+    private func updateOptionPreview(optionPressed: Bool, capturePoint: CapturePoint?) {
+        guard state.snapshot.preferences.inputMode == .navigate, optionPressed else {
+            state.setOptionAnchorAvailability(.inactive)
+            overlay.updateVirtualFinger(coordinator.capturePointForVirtualFinger())
+            return
+        }
+        guard let capturePoint,
+              let simulatorPoint = coordinator.simulatorPoint(fromCapture: capturePoint) else {
+            state.setOptionAnchorAvailability(.outsideSimulator)
+            overlay.updateVirtualFinger(nil)
+            return
+        }
+        state.setOptionAnchorAvailability(.available(simulatorPoint))
+        overlay.updateVirtualFinger(capturePoint)
+    }
+
+    private func installModifierMonitors() {
+        guard globalModifierMonitor == nil, localModifierMonitor == nil else { return }
+        globalModifierMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.refreshOptionPreview() }
+        }
+        localModifierMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            self?.refreshOptionPreview()
+            return event
+        }
+    }
+
+    private func removeModifierMonitors() {
+        if let globalModifierMonitor {
+            NSEvent.removeMonitor(globalModifierMonitor)
+            self.globalModifierMonitor = nil
+        }
+        if let localModifierMonitor {
+            NSEvent.removeMonitor(localModifierMonitor)
+            self.localModifierMonitor = nil
+        }
     }
 }
 

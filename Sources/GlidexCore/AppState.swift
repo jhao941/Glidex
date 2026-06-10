@@ -60,6 +60,20 @@ public enum BorderVisibility: String, Codable, CaseIterable, Equatable, Sendable
     }
 }
 
+public enum OptionAnchorAvailability: Equatable, Sendable {
+    case inactive
+    case outsideSimulator
+    case available(SimulatorPoint)
+
+    public var title: String {
+        switch self {
+        case .inactive: "Ready"
+        case .outsideSimulator: "Pointer outside Simulator"
+        case .available: "Active"
+        }
+    }
+}
+
 public struct GlidexPreferenceValues: Codable, Equatable, Sendable {
     public var isEnabled: Bool
     public var inputMode: CaptureInputMode
@@ -86,17 +100,20 @@ public struct GlidexAppSnapshot: Equatable, Sendable {
     public var status: GlidexRuntimeStatus
     public var target: SimulatorTarget?
     public var isCalibrationMode: Bool
+    public var optionAnchorAvailability: OptionAnchorAvailability
 
     public init(
         preferences: GlidexPreferenceValues = .defaults,
         status: GlidexRuntimeStatus = .waiting("Looking for Simulator"),
         target: SimulatorTarget? = nil,
-        isCalibrationMode: Bool = false
+        isCalibrationMode: Bool = false,
+        optionAnchorAvailability: OptionAnchorAvailability = .inactive
     ) {
         self.preferences = preferences
         self.status = preferences.isEnabled ? status : .paused
         self.target = target
         self.isCalibrationMode = isCalibrationMode
+        self.optionAnchorAvailability = optionAnchorAvailability
     }
 
     public var acceptsInput: Bool {
@@ -169,6 +186,12 @@ public final class GlidexAppState {
     public func setCalibrationMode(_ enabled: Bool) {
         var next = snapshot
         next.isCalibrationMode = enabled
+        commit(next)
+    }
+
+    public func setOptionAnchorAvailability(_ availability: OptionAnchorAvailability) {
+        var next = snapshot
+        next.optionAnchorAvailability = availability
         commit(next)
     }
 

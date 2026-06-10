@@ -85,7 +85,7 @@ final class CaptureView: NSView {
 
     private func drawVirtualFinger() {
         guard presentation.showsTouchIndicator,
-              presentation.inputMode == .point || presentation.inputMode == .edge,
+              presentation.inputMode == .point || presentation.inputMode == .edge || presentation.optionAnchorAvailability.isAvailable,
               let point = virtualFinger?.cgPoint else { return }
         let ring = CGRect(x: point.x - 11, y: point.y - 11, width: 22, height: 22)
         NSColor.systemOrange.withAlphaComponent(0.25).setFill()
@@ -97,15 +97,24 @@ final class CaptureView: NSView {
     }
 
     private var borderColor: NSColor {
+        if case .available = presentation.optionAnchorAvailability {
+            return .systemOrange
+        }
         switch presentation.status {
         case .active:
-            .controlAccentColor
+            return .controlAccentColor
         case .connecting, .waiting:
-            .systemYellow
+            return .systemYellow
         case .paused:
-            .systemGray
+            return .systemGray
         case .error:
-            .systemRed
+            return .systemRed
         }
+    }
+}
+
+private extension OptionAnchorAvailability {
+    var isAvailable: Bool {
+        if case .available = self { true } else { false }
     }
 }

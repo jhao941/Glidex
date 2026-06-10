@@ -55,6 +55,14 @@ final class OverlayWindowController {
         captureView.render(snapshot: state.snapshot, virtualFinger: virtualFinger)
     }
 
+    func capturePoint(fromDesktop point: DesktopPoint) -> CapturePoint? {
+        guard window.frame.contains(point.cgPoint) else { return nil }
+        return CapturePoint(
+            x: point.x - window.frame.minX,
+            y: point.y - window.frame.minY
+        )
+    }
+
     var frame: CGRect { window.frame }
 
     var windowAlpha: CGFloat { window.alphaValue }

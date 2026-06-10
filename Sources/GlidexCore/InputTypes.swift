@@ -41,6 +41,24 @@ public struct CapturePoint: Codable, Equatable, Sendable {
     }
 }
 
+public struct DesktopPoint: Codable, Equatable, Sendable {
+    public var x: CGFloat
+    public var y: CGFloat
+
+    public init(x: CGFloat, y: CGFloat) {
+        self.x = x
+        self.y = y
+    }
+
+    public init(_ point: CGPoint) {
+        self.init(x: point.x, y: point.y)
+    }
+
+    public var cgPoint: CGPoint {
+        CGPoint(x: x, y: y)
+    }
+}
+
 public struct SimulatorPoint: Equatable, Sendable {
     public var x: CGFloat
     public var y: CGFloat

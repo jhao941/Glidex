@@ -45,6 +45,7 @@ final class StatusItemController: NSObject {
         let menu = NSMenu()
         menu.addItem(labelItem("Status: \(statusText(snapshot.status))"))
         menu.addItem(labelItem("Simulator: \(snapshot.target?.name ?? "None")"))
+        menu.addItem(labelItem("Option Anchor: \(snapshot.optionAnchorAvailability.title)"))
         menu.addItem(.separator())
 
         menu.addItem(actionItem(

@@ -3,6 +3,7 @@ import Foundation
 public final class GestureCoordinator {
     private let sink: TouchSink
     private let logger: Logger
+    private var rawGestureInputProvider: () -> GestureInputSample
 
     private var mapper: CoordinateMapper
     private var interpreter = GestureInterpreter()
@@ -14,13 +15,20 @@ public final class GestureCoordinator {
 
     public private(set) var mode: CaptureInputMode = .navigate
     public private(set) var virtualFingerPoint: SimulatorPoint?
+    public private(set) var activeGestureContext: GestureInputContext?
     public var onStateChange: (() -> Void)?
     public var inputStatus: String { activeTransaction == nil ? "idle" : "active" }
 
-    public init(mapper: CoordinateMapper, sink: TouchSink, logger: Logger) {
+    public init(
+        mapper: CoordinateMapper,
+        sink: TouchSink,
+        logger: Logger,
+        rawGestureInputProvider: @escaping () -> GestureInputSample = { .none }
+    ) {
         self.mapper = mapper
         self.sink = sink
         self.logger = logger
+        self.rawGestureInputProvider = rawGestureInputProvider
     }
 
     public func updateMapper(_ mapper: CoordinateMapper) {
@@ -31,6 +39,10 @@ public final class GestureCoordinator {
                 y: mapper.simulatorSize.height / 2
             )
         }
+    }
+
+    public func setRawGestureInputProvider(_ provider: @escaping () -> GestureInputSample) {
+        rawGestureInputProvider = provider
     }
 
     public func updatePointer(_ point: CapturePoint) {
@@ -109,17 +121,28 @@ public final class GestureCoordinator {
         handleMouseAction(mouseState.cancel())
         cancelActive(reason: "raw gesture began")
         let fallback = mapper.simulatorPoint(fromNormalizedTouch: gesture.initialCentroid)
-        let policy = anchorPolicy(fallback: fallback)
-        let anchor = policy.resolve(
+        let sample = rawGestureInputProvider()
+        let simulatorMouseLocation = sample.captureMouseLocation.flatMap(mapper.simulatorPoint(fromCapture:))
+        let context = GestureInputContext.resolve(
+            persistentMode: mode,
+            optionPressed: sample.optionPressed,
+            globalMouseLocation: sample.globalMouseLocation,
+            simulatorMouseLocation: simulatorMouseLocation,
+            fixedPoint: virtualFingerPoint ?? lastMousePoint,
+            fallback: fallback,
+            simulatorSize: mapper.simulatorSize
+        )
+        let anchor = context.anchorPolicy.resolve(
             fallback: fallback,
             simulatorSize: mapper.simulatorSize
         )
         let transaction = TouchTransaction(
             source: .rawTrackpad,
-            intent: mode == .edge ? .edge : gesture.intent,
+            intent: context.persistentMode == .edge ? .edge : gesture.intent,
             anchor: anchor,
             sink: sink
         )
+        activeGestureContext = context
         activeTransaction = transaction
         onStateChange?()
 
@@ -154,6 +177,7 @@ public final class GestureCoordinator {
         guard activeTransaction?.source == .rawTrackpad else { return }
         activeTransaction?.end()
         activeTransaction = nil
+        activeGestureContext = nil
         onStateChange?()
     }
 
@@ -163,6 +187,7 @@ public final class GestureCoordinator {
             logger.info("touch transaction cancelled gestureID=\(transaction.gestureID) reason=\(reason)")
         }
         activeTransaction = nil
+        activeGestureContext = nil
         onStateChange?()
     }
 
@@ -211,18 +236,8 @@ public final class GestureCoordinator {
         virtualFingerPoint.flatMap(mapper.capturePoint(fromSimulator:))
     }
 
-    private func anchorPolicy(fallback: SimulatorPoint) -> AnchorPolicy {
-        switch mode {
-        case .navigate:
-            return .navigate
-        case .point:
-            return .point(virtualFingerPoint ?? lastMousePoint)
-        case .edge:
-            let reference = virtualFingerPoint ?? fallback
-            return .edge(AnchorPolicy.nearestEdge(to: reference, simulatorSize: mapper.simulatorSize))
-        case .disabled:
-            return .navigate
-        }
+    public func simulatorPoint(fromCapture point: CapturePoint) -> SimulatorPoint? {
+        mapper.simulatorPoint(fromCapture: point)
     }
 
     private func initialPinchRadius(anchor: SimulatorPoint) -> CGFloat {
