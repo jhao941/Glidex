@@ -9,6 +9,8 @@ public final class IndigoTouchSink: TouchSink {
     private let injector: SimulatorInjector
     private let logger: Logger
     private var sessions: [UUID: ActiveSession] = [:]
+    private var reusableSingleSession: LiveTouchSession?
+    private var reusableTwoFingerSession: LiveTwoFingerTouchSession?
 
     public init(injector: SimulatorInjector, logger: Logger) {
         self.injector = injector
@@ -37,11 +39,13 @@ public final class IndigoTouchSink: TouchSink {
         do {
             switch snapshot.contacts.count {
             case 1:
-                let session = try injector.makeLiveTouchSession()
+                let session = try reusableSingleSession ?? injector.makeLiveTouchSession()
+                reusableSingleSession = session
                 sessions[snapshot.gestureID] = .single(session)
                 session.begin(at: snapshot.contacts[0].point.cgPoint)
             case 2:
-                let session = try injector.makeLiveTwoFingerTouchSession()
+                let session = try reusableTwoFingerSession ?? injector.makeLiveTwoFingerTouchSession()
+                reusableTwoFingerSession = session
                 sessions[snapshot.gestureID] = .twoFinger(session)
                 session.begin(
                     finger1: snapshot.contacts[0].point.cgPoint,
