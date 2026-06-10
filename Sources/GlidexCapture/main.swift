@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import CoreGraphics
 import Foundation
 import GlidexCore
@@ -96,6 +97,8 @@ private final class CaptureView: NSView {
     private var rawReusableTwoFingerSession: LiveTwoFingerTouchSession?
     private var rawTwoFingerGesture: RawTwoFingerGestureState?
     private var rawTwoFingerScrollPoint: CGPoint?
+    private var mouseTrackingArea: NSTrackingArea?
+    private var lastMouseSimulatorPoint: CGPoint?
     private nonisolated(unsafe) var localMouseEventMonitor: Any?
     private var locallyHandledMouseEvents: [MouseEventSignature] = []
 
@@ -135,6 +138,7 @@ private final class CaptureView: NSView {
 
     override func viewDidMoveToWindow() {
         window?.makeFirstResponder(self)
+        window?.acceptsMouseMovedEvents = true
     }
 
     override func layout() {
@@ -143,6 +147,21 @@ private final class CaptureView: NSView {
             calibration.captureRect = defaultCaptureRect(in: bounds)
         }
         calibration.captureRect = constrainedCaptureRect(calibration.captureRect)
+        updateMouseTrackingArea()
+    }
+
+    private func updateMouseTrackingArea() {
+        if let mouseTrackingArea {
+            removeTrackingArea(mouseTrackingArea)
+        }
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.activeInKeyWindow, .mouseMoved, .mouseEnteredAndExited, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        mouseTrackingArea = trackingArea
+        addTrackingArea(trackingArea)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -277,14 +296,16 @@ private final class CaptureView: NSView {
 
         if rawTwoFingerGesture?.contactIDs.0 != contactIDs.0 || rawTwoFingerGesture?.contactIDs.1 != contactIDs.1 {
             resetRawTwoFingerGesture()
+            let anchor = rawGestureAnchorPoint(fallbackCentroid: centroid)
+            let pinchRadius = rawInitialPinchRadius(anchor: anchor)
             rawTwoFingerGesture = RawTwoFingerGestureState(
                 contactIDs: contactIDs,
                 initialTimestamp: timestamp,
                 initialCentroid: centroid,
                 initialDistance: distance,
-                initialSimulatorPoint: simulatorPoint(fromNormalizedRawTouch: centroid),
-                initialPinchRadius: rawInitialPinchRadius(first: first, second: second),
-                currentPinchRadius: rawInitialPinchRadius(first: first, second: second),
+                initialSimulatorPoint: anchor,
+                initialPinchRadius: pinchRadius,
+                currentPinchRadius: pinchRadius,
                 intent: nil
             )
         }
@@ -450,8 +471,15 @@ private final class CaptureView: NSView {
         ))
     }
 
-    private func rawInitialPinchRadius(first: RawTouchContact, second: RawTouchContact) -> CGFloat {
-        72
+    private func rawGestureAnchorPoint(fallbackCentroid: CGPoint) -> CGPoint {
+        lastMouseSimulatorPoint
+            ?? simulatorPoint(fromNormalizedRawTouch: fallbackCentroid)
+    }
+
+    private func rawInitialPinchRadius(anchor: CGPoint) -> CGFloat {
+        let screenMaxRadius = min(calibration.simulatorSize.width, calibration.simulatorSize.height) * 0.34
+        let edgeMaxRadius = min(anchor.x, calibration.simulatorSize.width - anchor.x)
+        return min(72, max(24, min(screenMaxRadius, edgeMaxRadius)))
     }
 
     private func rawPinchFingers(gesture: inout RawTwoFingerGestureState, distance: CGFloat) -> (CGPoint, CGPoint) {
@@ -484,6 +512,7 @@ private final class CaptureView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         guard !consumeIfAlreadyHandledByLocalMonitor(event) else { return }
+        updateLastMousePoint(from: event)
         handleCaptureMouseDown(event)
     }
 
@@ -527,6 +556,7 @@ private final class CaptureView: NSView {
 
     override func mouseDragged(with event: NSEvent) {
         guard !consumeIfAlreadyHandledByLocalMonitor(event) else { return }
+        updateLastMousePoint(from: event)
         handleCaptureMouseDragged(event)
     }
 
@@ -612,7 +642,12 @@ private final class CaptureView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         guard !consumeIfAlreadyHandledByLocalMonitor(event) else { return }
+        updateLastMousePoint(from: event)
         handleCaptureMouseUp(event)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        updateLastMousePoint(from: event)
     }
 
     private func handleCaptureMouseUp(_ event: NSEvent) {
@@ -643,19 +678,33 @@ private final class CaptureView: NSView {
         switch event.type {
         case .leftMouseDown:
             rememberLocallyHandledMouseEvent(event)
+            updateLastMousePoint(from: event)
             handleCaptureMouseDown(event)
             return nil
         case .leftMouseDragged:
             rememberLocallyHandledMouseEvent(event)
+            updateLastMousePoint(from: event)
             handleCaptureMouseDragged(event)
             return nil
         case .leftMouseUp:
             rememberLocallyHandledMouseEvent(event)
+            updateLastMousePoint(from: event)
             handleCaptureMouseUp(event)
             return nil
         default:
             return event
         }
+    }
+
+    private func updateLastMousePoint(from event: NSEvent) {
+        updateLastMousePoint(localPoint: convert(event.locationInWindow, from: nil))
+    }
+
+    private func updateLastMousePoint(localPoint: CGPoint) {
+        guard let simulatorPoint = calibration.simulatorPoint(from: localPoint) else {
+            return
+        }
+        lastMouseSimulatorPoint = calibration.clampedSimulatorPoint(simulatorPoint)
     }
 
     private func rememberLocallyHandledMouseEvent(_ event: NSEvent) {
@@ -676,6 +725,16 @@ private final class CaptureView: NSView {
     }
 
     private func attachToSimulatorWindow() {
+        if let screenFrame = SimulatorWindowLocator.findSimulatorScreenFrame(simulatorSize: calibration.simulatorSize) {
+            moveOverlayToSimulatorScreen(screenFrame, animate: true)
+            hostWindow?.level = .floating
+            hostWindow?.makeKeyAndOrderFront(nil)
+            startSimulatorFollow()
+            logger.info("capture attached to Simulator screen frame=\(format(screenFrame))")
+            needsDisplay = true
+            return
+        }
+
         guard let frame = SimulatorWindowLocator.findSimulatorWindowFrame() else {
             logger.warn("capture overlay attach failed: Simulator window not found")
             return
@@ -721,6 +780,16 @@ private final class CaptureView: NSView {
     }
 
     private func syncToSimulatorWindow() {
+        if let screenFrame = SimulatorWindowLocator.findSimulatorScreenFrame(simulatorSize: calibration.simulatorSize) {
+            guard let currentFrame = hostWindow?.frame, !currentFrame.isNearlyEqual(to: screenFrame) else {
+                return
+            }
+            moveOverlayToSimulatorScreen(screenFrame, animate: false)
+            logger.info("capture followed Simulator screen frame=\(format(screenFrame))")
+            needsDisplay = true
+            return
+        }
+
         guard let frame = SimulatorWindowLocator.findSimulatorWindowFrame() else {
             logger.warn("capture simulator follow skipped: Simulator window not found")
             return
@@ -751,6 +820,13 @@ private final class CaptureView: NSView {
             from: previousSize,
             to: frame.size
         )
+    }
+
+    private func moveOverlayToSimulatorScreen(_ frame: CGRect, animate: Bool) {
+        hostWindow?.setFrame(frame, display: true, animate: animate)
+        calibration.captureRect = CGRect(origin: .zero, size: frame.size)
+        calibration.isLocked = true
+        startRawTouchBackend()
     }
 
     private func toggleOverlayMode() {
@@ -898,6 +974,53 @@ private struct CalibrationState {
 }
 
 private enum SimulatorWindowLocator {
+    private struct AXFrameCandidate {
+        var frame: CGRect
+        var role: String
+        var score: CGFloat
+    }
+
+    static func findSimulatorScreenFrame(simulatorSize: CGSize) -> CGRect? {
+        guard AXIsProcessTrustedWithOptions([
+            "AXTrustedCheckOptionPrompt": true
+        ] as CFDictionary) else {
+            return nil
+        }
+
+        guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.apple.iphonesimulator" }) else {
+            return nil
+        }
+
+        guard let windowFrame = findSimulatorWindowFrame() else {
+            return nil
+        }
+
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        guard let windows: [AXUIElement] = copyAXAttribute(appElement, kAXWindowsAttribute) else {
+            return nil
+        }
+
+        let targetAspect = simulatorSize.width / simulatorSize.height
+        var candidates: [AXFrameCandidate] = []
+        var visited = 0
+
+        for window in windows {
+            collectScreenCandidates(
+                from: window,
+                windowFrame: windowFrame,
+                targetAspect: targetAspect,
+                depth: 0,
+                visited: &visited,
+                candidates: &candidates
+            )
+        }
+
+        return candidates
+            .sorted { $0.score > $1.score }
+            .first?
+            .frame
+    }
+
     static func findSimulatorWindowFrame() -> CGRect? {
         let options = CGWindowListOption(arrayLiteral: .optionOnScreenOnly, .excludeDesktopElements)
         guard let windowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
@@ -927,6 +1050,95 @@ private enum SimulatorWindowLocator {
             width: bounds.width,
             height: bounds.height
         )
+    }
+
+    private static func collectScreenCandidates(
+        from element: AXUIElement,
+        windowFrame: CGRect,
+        targetAspect: CGFloat,
+        depth: Int,
+        visited: inout Int,
+        candidates: inout [AXFrameCandidate]
+    ) {
+        guard depth <= 8, visited < 1_000 else { return }
+        visited += 1
+
+        if let frame = elementFrame(element, containingWindowFrame: windowFrame) {
+            let role: String = copyAXAttribute(element, kAXRoleAttribute) ?? ""
+            if let candidate = screenCandidate(frame: frame, role: role, windowFrame: windowFrame, targetAspect: targetAspect) {
+                candidates.append(candidate)
+            }
+        }
+
+        guard let children: [AXUIElement] = copyAXAttribute(element, kAXChildrenAttribute) else {
+            return
+        }
+
+        for child in children {
+            collectScreenCandidates(
+                from: child,
+                windowFrame: windowFrame,
+                targetAspect: targetAspect,
+                depth: depth + 1,
+                visited: &visited,
+                candidates: &candidates
+            )
+        }
+    }
+
+    private static func screenCandidate(frame: CGRect, role: String, windowFrame: CGRect, targetAspect: CGFloat) -> AXFrameCandidate? {
+        guard frame.width >= 160, frame.height >= 320 else { return nil }
+        guard frame.width < windowFrame.width * 0.98 || frame.height < windowFrame.height * 0.98 else { return nil }
+        guard windowFrame.insetBy(dx: -2, dy: -2).contains(frame) else { return nil }
+
+        let aspect = frame.width / frame.height
+        let aspectError = abs(aspect - targetAspect) / targetAspect
+        guard aspectError <= 0.18 else { return nil }
+
+        let area = frame.width * frame.height
+        let areaRatio = area / max(windowFrame.width * windowFrame.height, 1)
+        guard areaRatio >= 0.25 else { return nil }
+
+        let horizontalCenterError = abs(frame.midX - windowFrame.midX) / max(windowFrame.width, 1)
+        let topToolbarGap = windowFrame.maxY - frame.maxY
+        let toolbarBonus: CGFloat = topToolbarGap > 20 ? 0.15 : 0
+        let score = areaRatio * 1.4 - aspectError * 2.2 - horizontalCenterError + toolbarBonus
+        return AXFrameCandidate(frame: frame, role: role, score: score)
+    }
+
+    private static func elementFrame(_ element: AXUIElement, containingWindowFrame windowFrame: CGRect) -> CGRect? {
+        guard let positionValue: AXValue = copyAXAttribute(element, kAXPositionAttribute),
+              let sizeValue: AXValue = copyAXAttribute(element, kAXSizeAttribute) else {
+            return nil
+        }
+
+        var position = CGPoint.zero
+        var size = CGSize.zero
+        guard AXValueGetValue(positionValue, .cgPoint, &position),
+              AXValueGetValue(sizeValue, .cgSize, &size),
+              size.width > 0,
+              size.height > 0 else {
+            return nil
+        }
+
+        let rawFrame = CGRect(origin: position, size: size)
+        let convertedFrame = appKitFrameFromCGWindowBounds(rawFrame)
+        if windowFrame.insetBy(dx: -2, dy: -2).contains(convertedFrame) {
+            return convertedFrame
+        }
+        if windowFrame.insetBy(dx: -2, dy: -2).contains(rawFrame) {
+            return rawFrame
+        }
+        return convertedFrame
+    }
+
+    private static func copyAXAttribute<T>(_ element: AXUIElement, _ attribute: String) -> T? {
+        var value: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+        guard result == .success, let value else {
+            return nil
+        }
+        return value as? T
     }
 }
 

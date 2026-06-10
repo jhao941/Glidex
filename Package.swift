@@ -35,6 +35,7 @@ let package = Package(
             dependencies: ["GlidexCore"],
             path: "Sources/GlidexCapture",
             linkerSettings: [
+                .linkedFramework("ApplicationServices"),
                 .linkedFramework("AppKit"),
                 .linkedFramework("CoreGraphics"),
                 .linkedFramework("Foundation"),

@@ -3,12 +3,13 @@
 #import <dlfcn.h>
 #import <mach/mach_time.h>
 #import <malloc/malloc.h>
+#import <stddef.h>
 
 static const unsigned int STButtonEventTypeDown = 0x1;
 static const unsigned int STButtonEventTypeUp = 0x2;
 static const unsigned int STTouchTarget = 0x32;
 static const size_t STIndigoPayloadSize = 0xA0;
-static const size_t STSingleTouchMessageSize = 0x140;
+static const size_t STSingleTouchMessageSize = offsetof(IndigoMessage, payload) + (STIndigoPayloadSize * 2);
 static const char *STSimulatorKitPath = "/Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit";
 
 #pragma mark - IndigoMessageBuilder
