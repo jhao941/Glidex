@@ -22,6 +22,7 @@ final class CaptureSession {
     private var selectedTarget: SimulatorTarget?
     private var nativeTarget: SimulatorTarget?
     private var lastTrackedFrame: CGRect?
+    private var lastHostTarget: SimulatorWindowTracker.Target?
     private var lastSimulatorPID: pid_t?
     private var frameAdjustment = OverlayFrameAdjustment()
     private var lastEnabled: Bool
@@ -157,52 +158,56 @@ final class CaptureSession {
         }
         installModifierMonitors()
 
-        let lookup = windowTracker.lookupTarget(simulatorSize: Self.fallbackSimulatorSize.cgSize)
-        let provisional: SimulatorWindowTracker.Target
-        switch lookup {
-        case .none:
+        let displays = windowTracker.discoverTargets(simulatorSize: Self.fallbackSimulatorSize.cgSize)
+        guard !displays.isEmpty else {
             wait(reason: "Looking for Simulator window")
-            return
-        case let .target(target):
-            provisional = target
-        case .ambiguous:
-            fail(.ambiguousTarget, retry: true)
             return
         }
         do {
             let devices = try injector.listBootedSimulators()
-            switch SimulatorTargetSelector.resolve(
-                from: devices,
-                hasVisibleWindow: true,
-                windowTitle: provisional.windowTitle
+            switch SimulatorDisplaySelector.resolve(
+                displays: displays.map(\.descriptor),
+                devices: devices
             ) {
             case .unavailable:
                 wait(reason: devices.isEmpty ? "No booted Simulator" : "Looking for Simulator window")
             case .ambiguous:
                 fail(.ambiguousTarget, retry: true)
-            case let .selected(record):
-                attach(record: record)
+            case let .selected(descriptor, record):
+                guard let tracked = displays.first(where: { $0.descriptor == descriptor }) else {
+                    wait(reason: "Simulator display changed during attachment")
+                    return
+                }
+                logger.info(
+                    "selected display host=\(descriptor.hostKind.rawValue) pid=\(descriptor.ownerPID) displayUDID=\(descriptor.deviceUDID ?? "unavailable") targetUDID=\(record.udid)"
+                )
+                attach(record: record, tracked: tracked)
             }
         } catch {
             fail(.other("Simulator discovery failed: \(error)"), retry: true)
         }
     }
 
-    private func attach(record: BootedSimulatorRecord) {
+    private func attach(record: BootedSimulatorRecord, tracked: SimulatorWindowTracker.Target) {
         do {
             state.transition(to: .connecting)
             stopActiveInput(reason: "Simulator target changing")
             coordinator.prepareForDeviceChange()
 
-            let target = try injector.selectTarget(udid: record.udid)
-            guard let tracked = windowTracker.currentTarget(simulatorSize: target.pointSize.cgSize),
-                  tracked.kind == .screen else {
+            guard tracked.kind == .screen else {
                 wait(reason: "Locating Simulator screen")
                 return
             }
+            guard let resolution = DeveloperDirectoryResolver().resolve(hostBundleURL: tracked.hostBundleURL) else {
+                fail(.hidInitialization("No compatible SimulatorKit found for \(tracked.descriptor.hostKind.rawValue)"), retry: true)
+                return
+            }
+            injector.useDeveloperDirectory(resolution)
+            let target = try injector.selectTarget(udid: record.udid)
 
             nativeTarget = target
             lastSimulatorPID = tracked.ownerPID
+            lastHostTarget = tracked
             frameAdjustment = OverlayFrameAdjustment()
             applyTrackedTarget(
                 tracked,
@@ -211,7 +216,7 @@ final class CaptureSession {
                 activate: false
             )
             guard startRawTouchStream() else { return }
-            startWindowTracking(for: target)
+            startWindowTracking(for: target, hostTarget: tracked)
             retryTimer?.invalidate()
             retryTimer = nil
             state.transition(to: .active, target: selectedTarget)
@@ -248,9 +253,12 @@ final class CaptureSession {
         }
     }
 
-    private func startWindowTracking(for target: SimulatorTarget) {
+    private func startWindowTracking(
+        for target: SimulatorTarget,
+        hostTarget: SimulatorWindowTracker.Target
+    ) {
         windowTracker.stop()
-        windowTracker.start(simulatorSize: target.pointSize.cgSize) { [weak self] lookup in
+        windowTracker.start(target: hostTarget, simulatorSize: target.pointSize.cgSize) { [weak self] lookup in
             self?.handleTrackedLookup(lookup, expectedTarget: target)
         }
     }
@@ -269,7 +277,13 @@ final class CaptureSession {
                 wait(reason: "Locating Simulator screen")
                 return
             }
-            if let title = tracked.windowTitle,
+            if let udid = tracked.descriptor.deviceUDID,
+               udid.caseInsensitiveCompare(expectedTarget.udid) != .orderedSame {
+                reattach()
+                return
+            }
+            if tracked.descriptor.hostKind == .legacySimulator,
+               let title = tracked.windowTitle,
                !title.localizedCaseInsensitiveContains(expectedTarget.name) {
                 reattach()
                 return
@@ -279,6 +293,7 @@ final class CaptureSession {
                 return
             }
             guard !state.snapshot.isCalibrationMode else { return }
+            lastHostTarget = tracked
             applyTrackedTarget(
                 tracked,
                 nativeTarget: expectedTarget,
@@ -337,7 +352,11 @@ final class CaptureSession {
             return
         }
         finishCalibration(frame: overlay.frame)
-        startWindowTracking(for: nativeTarget)
+        guard let lastHostTarget else {
+            attemptAttach(promptForAccessibility: false)
+            return
+        }
+        startWindowTracking(for: nativeTarget, hostTarget: lastHostTarget)
     }
 
     private func wait(reason: String) {
@@ -345,6 +364,7 @@ final class CaptureSession {
         selectedTarget = nil
         nativeTarget = nil
         lastTrackedFrame = nil
+        lastHostTarget = nil
         lastSimulatorPID = nil
         overlay.hide()
         state.transition(to: .waiting(reason))

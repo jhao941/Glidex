@@ -22,13 +22,21 @@ final class SimulatorKitLoader {
 
     let logger: Logger
     let loader: PrivateFrameworkLoader
-    let frameworkPath = "/Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit"
+    private var frameworkPath: String
 
     private(set) var framework: PrivateFrameworkHandle?
 
     init(logger: Logger, loader: PrivateFrameworkLoader) {
         self.logger = logger
         self.loader = loader
+        self.frameworkPath = DeveloperDirectoryResolver().resolve(hostBundleURL: nil)?.simulatorKitPath
+            ?? "/Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit"
+    }
+
+    func useFramework(at path: String) {
+        guard frameworkPath != path else { return }
+        frameworkPath = path
+        framework = nil
     }
 
     func load() throws {

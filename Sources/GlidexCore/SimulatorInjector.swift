@@ -40,6 +40,13 @@ public final class SimulatorInjector: @unchecked Sendable {
         try resolver.listBootedSimulators()
     }
 
+    public func useDeveloperDirectory(_ resolution: DeveloperDirectoryResolution) {
+        resolver.useDeveloperDirectory(resolution.developerDirectory)
+        simulatorKit.useFramework(at: resolution.simulatorKitPath)
+        selectedSimulator = nil
+        logger.info("selected developer directory: \(resolution.developerDirectory)")
+    }
+
     @discardableResult
     public func selectTarget(udid: String) throws -> SimulatorTarget {
         let devices = try listBootedSimulators()

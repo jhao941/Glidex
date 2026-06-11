@@ -4,6 +4,13 @@ import CoreGraphics
 import Foundation
 import GlidexCore
 
+private protocol SimulatorDisplayHost: AnyObject {
+    var kind: SimulatorDisplayHostKind { get }
+    func discover(simulatorSize: CGSize) -> [SimulatorWindowTracker.Target]
+    func refresh(_ target: SimulatorWindowTracker.Target, simulatorSize: CGSize) -> SimulatorWindowTracker.Target?
+    func invalidateCache(ownerPID: pid_t)
+}
+
 @MainActor
 final class SimulatorWindowTracker {
     enum Lookup: Equatable {
@@ -18,274 +25,394 @@ final class SimulatorWindowTracker {
             case window
         }
 
-        var frame: CGRect
+        var descriptor: SimulatorDisplayDescriptor
         var kind: Kind
-        var windowTitle: String?
-        var ownerPID: pid_t
-    }
+        var hostBundleURL: URL?
+        var observedElement: AXUIElement?
 
-    private struct AXFrameCandidate {
-        var frame: CGRect
-        var score: CGFloat
+        var frame: CGRect { descriptor.contentFrame }
+        var windowTitle: String? { descriptor.windowTitle }
+        var ownerPID: pid_t { descriptor.ownerPID }
+
+        static func == (lhs: Target, rhs: Target) -> Bool {
+            lhs.descriptor == rhs.descriptor && lhs.kind == rhs.kind && lhs.hostBundleURL == rhs.hostBundleURL
+        }
     }
 
     private let logger: Logger
+    private let hosts: [SimulatorDisplayHost]
     private var timer: Timer?
     private var simulatorSize = CGSize.zero
     private var onChange: ((Lookup) -> Void)?
     private var lastLookup: Lookup?
+    private var selectedTarget: Target?
     private var observer: AXObserver?
-    private var observedWindow: AXUIElement?
 
     private(set) var isFollowing = false
 
     init(logger: Logger) {
         self.logger = logger
+        self.hosts = [DeviceHubHost(), LegacySimulatorHost()]
     }
 
-    func currentTarget(simulatorSize: CGSize) -> Target? {
-        guard case let .target(target) = lookupTarget(simulatorSize: simulatorSize) else {
-            return nil
-        }
-        return target
+    func discoverTargets(simulatorSize: CGSize) -> [Target] {
+        hosts.flatMap { $0.discover(simulatorSize: simulatorSize) }
     }
 
     func lookupTarget(simulatorSize: CGSize) -> Lookup {
-        let windows = Self.findSimulatorWindows()
-        guard !windows.isEmpty else { return .none }
-        guard windows.count == 1, let window = windows.first else { return .ambiguous }
-        if let frame = Self.findSimulatorScreenFrame(
-            simulatorSize: simulatorSize,
-            windowFrame: window.frame
-        ) {
-            return .target(Target(
-                frame: frame,
-                kind: .screen,
-                windowTitle: window.title,
-                ownerPID: window.pid
-            ))
-        }
-        return .target(Target(
-            frame: window.frame,
-            kind: .window,
-            windowTitle: window.title,
-            ownerPID: window.pid
-        ))
+        let targets = discoverTargets(simulatorSize: simulatorSize)
+        guard !targets.isEmpty else { return .none }
+        guard targets.count == 1, let target = targets.first else { return .ambiguous }
+        return .target(target)
     }
 
-    func start(simulatorSize: CGSize, onChange: @escaping (Lookup) -> Void) {
-        guard !isFollowing else { return }
+    func currentTarget(simulatorSize: CGSize) -> Target? {
+        guard case let .target(target) = lookupTarget(simulatorSize: simulatorSize) else { return nil }
+        return target
+    }
+
+    func start(target: Target, simulatorSize: CGSize, onChange: @escaping (Lookup) -> Void) {
+        stop()
         self.simulatorSize = simulatorSize
         self.onChange = onChange
+        self.selectedTarget = target
+        self.lastLookup = .target(target)
         isFollowing = true
-        poll()
-        guard isFollowing else { return }
-        let hasAXObserver = startAXObserver()
+        let hasAXObserver = startAXObserver(target: target)
         startPollingFallback()
-        logger.info("capture simulator follow enabled strategy=\(hasAXObserver ? "ax-observer+health-poll" : "polling-fallback")")
+        logger.info(
+            "capture display follow enabled host=\(target.descriptor.hostKind.rawValue) strategy=\(hasAXObserver ? "ax-observer+health-poll" : "polling-fallback")"
+        )
     }
 
     func stop() {
-        guard isFollowing else { return }
         timer?.invalidate()
         timer = nil
         if let observer {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
         }
         observer = nil
-        observedWindow = nil
+        selectedTarget = nil
         onChange = nil
         lastLookup = nil
+        let wasFollowing = isFollowing
         isFollowing = false
-        logger.info("capture simulator follow disabled")
+        if wasFollowing { logger.info("capture display follow disabled") }
     }
 
     private func poll() {
-        let lookup = lookupTarget(simulatorSize: simulatorSize)
+        guard let selectedTarget,
+              let host = hosts.first(where: { $0.kind == selectedTarget.descriptor.hostKind }) else { return }
+        let lookup: Lookup
+        if let refreshed = host.refresh(selectedTarget, simulatorSize: simulatorSize) {
+            self.selectedTarget = refreshed
+            lookup = .target(refreshed)
+        } else {
+            lookup = .none
+        }
         guard lookup != lastLookup else { return }
         lastLookup = lookup
         onChange?(lookup)
     }
 
-    private func startAXObserver() -> Bool {
-        guard let target = currentTarget(simulatorSize: simulatorSize), target.ownerPID != 0 else { return false }
-        let appElement = AXUIElementCreateApplication(target.ownerPID)
-        guard let windows: [AXUIElement] = Self.copyAXAttribute(appElement, kAXWindowsAttribute),
-              let window = windows.min(by: {
-                  Self.frameDistance(Self.axFrame($0), target.frame) < Self.frameDistance(Self.axFrame($1), target.frame)
-              }) else { return false }
-
+    private func startAXObserver(target: Target) -> Bool {
+        guard target.ownerPID != 0, let element = target.observedElement else { return false }
         var createdObserver: AXObserver?
-        let result = AXObserverCreate(target.ownerPID, Self.observerCallback, &createdObserver)
-        guard result == .success, let createdObserver else { return false }
+        guard AXObserverCreate(target.ownerPID, Self.observerCallback, &createdObserver) == .success,
+              let createdObserver else { return false }
         let refcon = Unmanaged.passUnretained(self).toOpaque()
-        guard AXObserverAddNotification(createdObserver, window, kAXMovedNotification as CFString, refcon) == .success,
-              AXObserverAddNotification(createdObserver, window, kAXResizedNotification as CFString, refcon) == .success else {
-            return false
+        let notifications = [
+            kAXMovedNotification as String,
+            kAXResizedNotification as String,
+            kAXUIElementDestroyedNotification as String,
+            kAXLayoutChangedNotification as String,
+        ]
+        var installed = false
+        for notification in notifications {
+            if AXObserverAddNotification(createdObserver, element, notification as CFString, refcon) == .success {
+                installed = true
+            }
         }
-        _ = AXObserverAddNotification(createdObserver, window, kAXUIElementDestroyedNotification as CFString, refcon)
-
+        guard installed else { return false }
         observer = createdObserver
-        observedWindow = window
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(createdObserver), .commonModes)
         return true
     }
 
     private func startPollingFallback() {
-        let timer = Timer(timeInterval: 2.0, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.poll() }
         }
         self.timer = timer
         RunLoop.main.add(timer, forMode: .common)
     }
 
-    private static let observerCallback: AXObserverCallback = { _, _, _, refcon in
+    private static let observerCallback: AXObserverCallback = { _, element, notification, refcon in
         guard let refcon else { return }
         let tracker = Unmanaged<SimulatorWindowTracker>.fromOpaque(refcon).takeUnretainedValue()
+        let wasDestroyed = notification as String == kAXUIElementDestroyedNotification as String
         DispatchQueue.main.async {
+            if wasDestroyed,
+               let target = tracker.selectedTarget,
+               let host = tracker.hosts.first(where: { $0.kind == target.descriptor.hostKind }) {
+                host.invalidateCache(ownerPID: target.ownerPID)
+                if let observer = tracker.observer {
+                    CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
+                }
+                tracker.observer = nil
+            }
             tracker.poll()
+            if tracker.isFollowing, tracker.observer == nil, let target = tracker.selectedTarget {
+                _ = tracker.startAXObserver(target: target)
+            }
+        }
+        _ = element
+    }
+}
+
+private final class DeviceHubHost: SimulatorDisplayHost {
+    let kind = SimulatorDisplayHostKind.deviceHub
+    private let bundleIdentifier = "com.apple.dt.Devices"
+    private var cachedGroups: [pid_t: [AXUIElement]] = [:]
+
+    func discover(simulatorSize: CGSize) -> [SimulatorWindowTracker.Target] {
+        NSWorkspace.shared.runningApplications
+            .filter { $0.bundleIdentifier == bundleIdentifier }
+            .flatMap { targets(for: $0, rebuildCache: false) }
+    }
+
+    func refresh(
+        _ target: SimulatorWindowTracker.Target,
+        simulatorSize: CGSize
+    ) -> SimulatorWindowTracker.Target? {
+        guard let app = NSWorkspace.shared.runningApplications.first(where: {
+            $0.processIdentifier == target.ownerPID && $0.bundleIdentifier == bundleIdentifier
+        }) else {
+            invalidateCache(ownerPID: target.ownerPID)
+            return nil
+        }
+        let refreshedTargets = targets(for: app, rebuildCache: false)
+        if let exact = refreshedTargets.first(where: {
+            $0.descriptor.representsSameDisplay(as: target.descriptor)
+        }) { return exact }
+        if refreshedTargets.count == 1 { return refreshedTargets[0] }
+        invalidateCache(ownerPID: target.ownerPID)
+        let rebuilt = targets(for: app, rebuildCache: true)
+        return rebuilt.count == 1 ? rebuilt[0] : nil
+    }
+
+    func invalidateCache(ownerPID: pid_t) {
+        cachedGroups[ownerPID] = nil
+    }
+
+    private func targets(for app: NSRunningApplication, rebuildCache: Bool) -> [SimulatorWindowTracker.Target] {
+        let pid = app.processIdentifier
+        if rebuildCache { cachedGroups[pid] = nil }
+        let appElement = AXUIElementCreateApplication(pid)
+        guard let windows: [AXUIElement] = AXSupport.copyAttribute(appElement, kAXWindowsAttribute) else { return [] }
+        let groups: [AXUIElement]
+        if let cached = cachedGroups[pid], !cached.isEmpty, cached.allSatisfy({ AXSupport.frame($0) != nil }) {
+            groups = cached
+        } else {
+            groups = windows.flatMap { AXSupport.findElements(in: $0, subrole: "iOSContentGroup") }
+            cachedGroups[pid] = groups
+        }
+        let metadata = windows.reduce(into: [ObjectIdentifier: DeviceHubMetadata]()) { result, window in
+            result[ObjectIdentifier(window)] = AXSupport.deviceHubMetadata(in: window)
+        }
+        let resolution = DeveloperDirectoryResolver().resolve(hostBundleURL: app.bundleURL)
+
+        return groups.compactMap { group in
+            guard let contentFrame = AXSupport.frame(group),
+                  let window: AXUIElement = AXSupport.copyAttribute(group, kAXWindowAttribute),
+                  let windowFrame = AXSupport.frame(window) else { return nil }
+            let info = metadata[ObjectIdentifier(window)] ?? AXSupport.deviceHubMetadata(in: window)
+            let title: String? = AXSupport.copyAttribute(window, kAXTitleAttribute)
+            return SimulatorWindowTracker.Target(
+                descriptor: SimulatorDisplayDescriptor(
+                    hostKind: .deviceHub,
+                    ownerPID: pid,
+                    windowFrame: windowFrame,
+                    contentFrame: contentFrame,
+                    windowTitle: title,
+                    deviceName: info.deviceName,
+                    runtime: info.runtime,
+                    deviceUDID: info.udid,
+                    developerDirectory: resolution?.developerDirectory
+                ),
+                kind: .screen,
+                hostBundleURL: app.bundleURL,
+                observedElement: group
+            )
+        }
+    }
+}
+
+private final class LegacySimulatorHost: SimulatorDisplayHost {
+    let kind = SimulatorDisplayHostKind.legacySimulator
+    private let bundleIdentifier = "com.apple.iphonesimulator"
+
+    func discover(simulatorSize: CGSize) -> [SimulatorWindowTracker.Target] {
+        guard let app = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier == bundleIdentifier
+        }) else { return [] }
+        let resolution = DeveloperDirectoryResolver().resolve(hostBundleURL: app.bundleURL)
+        return AXSupport.legacyWindows(ownerPID: app.processIdentifier).map { window in
+            let screen = AXSupport.findLegacyScreenFrame(
+                in: window.element,
+                simulatorSize: simulatorSize,
+                windowFrame: window.frame
+            )
+            return SimulatorWindowTracker.Target(
+                descriptor: SimulatorDisplayDescriptor(
+                    hostKind: .legacySimulator,
+                    ownerPID: app.processIdentifier,
+                    windowFrame: window.frame,
+                    contentFrame: screen ?? window.frame,
+                    windowTitle: window.title,
+                    developerDirectory: resolution?.developerDirectory
+                ),
+                kind: screen == nil ? .window : .screen,
+                hostBundleURL: app.bundleURL,
+                observedElement: window.element
+            )
         }
     }
 
-    private static func findSimulatorScreenFrame(
+    func refresh(
+        _ target: SimulatorWindowTracker.Target,
+        simulatorSize: CGSize
+    ) -> SimulatorWindowTracker.Target? {
+        discover(simulatorSize: simulatorSize).min(by: {
+            AXSupport.frameDistance($0.descriptor.windowFrame, target.descriptor.windowFrame) <
+                AXSupport.frameDistance($1.descriptor.windowFrame, target.descriptor.windowFrame)
+        })
+    }
+
+    func invalidateCache(ownerPID: pid_t) {}
+}
+
+private struct DeviceHubMetadata {
+    var udid: String?
+    var deviceName: String?
+    var runtime: String?
+}
+
+private enum AXSupport {
+    private static let uuidPattern = try! NSRegularExpression(
+        pattern: #"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"#
+    )
+
+    static func findElements(in root: AXUIElement, subrole: String) -> [AXUIElement] {
+        var results: [AXUIElement] = []
+        var visited = 0
+        walk(root, depth: 0, visited: &visited) { element in
+            let value: String? = copyAttribute(element, kAXSubroleAttribute)
+            if value == subrole { results.append(element) }
+        }
+        return results
+    }
+
+    static func deviceHubMetadata(in window: AXUIElement) -> DeviceHubMetadata {
+        var strings: [String] = []
+        var visited = 0
+        walk(window, depth: 0, visited: &visited) { element in
+            for attribute in [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute, kAXIdentifierAttribute] {
+                if let value: String = copyAttribute(element, attribute), !value.isEmpty {
+                    strings.append(value)
+                }
+            }
+        }
+        let joined = strings.joined(separator: "\n")
+        let range = NSRange(joined.startIndex..., in: joined)
+        let udid = uuidPattern.firstMatch(in: joined, range: range).flatMap {
+            Range($0.range, in: joined).map { String(joined[$0]) }
+        }
+        let runtime = strings.first(where: { $0.range(of: #"iOS\s*\d+(?:\.\d+)*"#, options: .regularExpression) != nil })
+        let deviceName = strings.first(where: {
+            $0.localizedCaseInsensitiveContains("iPhone") || $0.localizedCaseInsensitiveContains("iPad")
+        })
+        return DeviceHubMetadata(udid: udid, deviceName: deviceName, runtime: runtime)
+    }
+
+    static func legacyWindows(ownerPID: pid_t) -> [(element: AXUIElement, frame: CGRect, title: String?)] {
+        let app = AXUIElementCreateApplication(ownerPID)
+        guard let windows: [AXUIElement] = copyAttribute(app, kAXWindowsAttribute) else { return [] }
+        return windows.compactMap { window in
+            guard let frame = frame(window), frame.width >= 180, frame.height >= 320 else { return nil }
+            let title: String? = copyAttribute(window, kAXTitleAttribute)
+            return (window, frame, title)
+        }
+    }
+
+    static func findLegacyScreenFrame(
+        in window: AXUIElement,
         simulatorSize: CGSize,
         windowFrame: CGRect
     ) -> CGRect? {
-        guard AXIsProcessTrusted() else {
-            return nil
-        }
-        guard let app = NSWorkspace.shared.runningApplications.first(where: {
-            $0.bundleIdentifier == "com.apple.iphonesimulator"
-        }) else {
-            return nil
-        }
-
-        let appElement = AXUIElementCreateApplication(app.processIdentifier)
-        guard let windows: [AXUIElement] = copyAXAttribute(appElement, kAXWindowsAttribute) else { return nil }
-
         let targetAspect = simulatorSize.width / simulatorSize.height
-        var candidates: [AXFrameCandidate] = []
+        var candidates: [(CGRect, CGFloat)] = []
         var visited = 0
-        for window in windows {
-            collectScreenCandidates(
-                from: window,
-                windowFrame: windowFrame,
-                targetAspect: targetAspect,
-                depth: 0,
-                visited: &visited,
-                candidates: &candidates
-            )
+        walk(window, depth: 0, visited: &visited) { element in
+            guard let candidate = frame(element),
+                  let score = candidateScore(candidate, windowFrame: windowFrame, targetAspect: targetAspect) else { return }
+            candidates.append((candidate, score))
         }
-        return candidates.max(by: { $0.score < $1.score })?.frame
+        return candidates.max(by: { $0.1 < $1.1 })?.0
     }
 
-    private static func findSimulatorWindows() -> [(frame: CGRect, title: String?, pid: pid_t)] {
-        let options = CGWindowListOption(arrayLiteral: .optionOnScreenOnly, .excludeDesktopElements)
-        guard let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
-            return []
-        }
-
-        return windows.compactMap { window in
-            guard window[kCGWindowOwnerName as String] as? String == "Simulator" else { return nil }
-            guard let bounds = window[kCGWindowBounds as String] as? [String: CGFloat],
-                  let x = bounds["X"], let y = bounds["Y"],
-                  let width = bounds["Width"], let height = bounds["Height"],
-                  width >= 180, height >= 320 else { return nil }
-            let title = window[kCGWindowName as String] as? String
-            let pid = (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value ?? 0
-            return (appKitFrame(from: CGRect(x: x, y: y, width: width, height: height)), title, pid)
-        }
-    }
-
-    private static func collectScreenCandidates(
-        from element: AXUIElement,
-        windowFrame: CGRect,
-        targetAspect: CGFloat,
-        depth: Int,
-        visited: inout Int,
-        candidates: inout [AXFrameCandidate]
-    ) {
-        guard depth <= 8, visited < 1_000 else { return }
-        visited += 1
-
-        if let frame = elementFrame(element, containing: windowFrame),
-           let score = candidateScore(frame: frame, windowFrame: windowFrame, targetAspect: targetAspect) {
-            candidates.append(AXFrameCandidate(frame: frame, score: score))
-        }
-
-        guard let children: [AXUIElement] = copyAXAttribute(element, kAXChildrenAttribute) else { return }
-        for child in children {
-            collectScreenCandidates(
-                from: child,
-                windowFrame: windowFrame,
-                targetAspect: targetAspect,
-                depth: depth + 1,
-                visited: &visited,
-                candidates: &candidates
-            )
-        }
-    }
-
-    private static func candidateScore(frame: CGRect, windowFrame: CGRect, targetAspect: CGFloat) -> CGFloat? {
-        guard frame.width >= 160, frame.height >= 320 else { return nil }
-        guard frame.width < windowFrame.width * 0.98 || frame.height < windowFrame.height * 0.98 else { return nil }
-        guard windowFrame.insetBy(dx: -2, dy: -2).contains(frame) else { return nil }
-
-        let frameAspect = frame.width / frame.height
-        let portraitError = abs(frameAspect - targetAspect) / targetAspect
-        let rotatedAspect = 1 / targetAspect
-        let landscapeError = abs(frameAspect - rotatedAspect) / rotatedAspect
-        let aspectError = min(portraitError, landscapeError)
-        guard aspectError <= 0.18 else { return nil }
-        let areaRatio = frame.width * frame.height / max(windowFrame.width * windowFrame.height, 1)
-        guard areaRatio >= 0.25 else { return nil }
-
-        let centerError = abs(frame.midX - windowFrame.midX) / max(windowFrame.width, 1)
-        let toolbarBonus: CGFloat = windowFrame.maxY - frame.maxY > 20 ? 0.15 : 0
-        return areaRatio * 1.4 - aspectError * 2.2 - centerError + toolbarBonus
-    }
-
-    private static func elementFrame(_ element: AXUIElement, containing windowFrame: CGRect) -> CGRect? {
-        guard let positionValue: AXValue = copyAXAttribute(element, kAXPositionAttribute),
-              let sizeValue: AXValue = copyAXAttribute(element, kAXSizeAttribute) else { return nil }
+    static func frame(_ element: AXUIElement) -> CGRect? {
+        guard let positionValue: AXValue = copyAttribute(element, kAXPositionAttribute),
+              let sizeValue: AXValue = copyAttribute(element, kAXSizeAttribute) else { return nil }
         var position = CGPoint.zero
         var size = CGSize.zero
         guard AXValueGetValue(positionValue, .cgPoint, &position),
               AXValueGetValue(sizeValue, .cgSize, &size), size.width > 0, size.height > 0 else { return nil }
-
-        let rawFrame = CGRect(origin: position, size: size)
-        let converted = appKitFrame(from: rawFrame)
-        if windowFrame.insetBy(dx: -2, dy: -2).contains(converted) { return converted }
-        if windowFrame.insetBy(dx: -2, dy: -2).contains(rawFrame) { return rawFrame }
-        return converted
-    }
-
-    private static func appKitFrame(from bounds: CGRect) -> CGRect {
-        DesktopCoordinateSpace(
-            mainDisplayHeight: CGDisplayBounds(CGMainDisplayID()).height
-        ).appKitFrame(fromQuartzTopLeft: bounds)
-    }
-
-    private static func axFrame(_ element: AXUIElement) -> CGRect? {
-        guard let positionValue: AXValue = copyAXAttribute(element, kAXPositionAttribute),
-              let sizeValue: AXValue = copyAXAttribute(element, kAXSizeAttribute) else { return nil }
-        var position = CGPoint.zero
-        var size = CGSize.zero
-        guard AXValueGetValue(positionValue, .cgPoint, &position),
-              AXValueGetValue(sizeValue, .cgSize, &size) else { return nil }
         return appKitFrame(from: CGRect(origin: position, size: size))
     }
 
-    private static func frameDistance(_ lhs: CGRect?, _ rhs: CGRect) -> CGFloat {
-        guard let lhs else { return .greatestFiniteMagnitude }
-        return abs(lhs.minX - rhs.minX) + abs(lhs.minY - rhs.minY) +
-            abs(lhs.width - rhs.width) + abs(lhs.height - rhs.height)
+    static func frameDistance(_ lhs: CGRect, _ rhs: CGRect) -> CGFloat {
+        abs(lhs.minX - rhs.minX) + abs(lhs.minY - rhs.minY) + abs(lhs.width - rhs.width) + abs(lhs.height - rhs.height)
     }
 
-    private static func copyAXAttribute<T>(_ element: AXUIElement, _ attribute: String) -> T? {
+    static func copyAttribute<T>(_ element: AXUIElement, _ attribute: String) -> T? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
               let value else { return nil }
         return value as? T
+    }
+
+    private static func walk(
+        _ element: AXUIElement,
+        depth: Int,
+        visited: inout Int,
+        visit: (AXUIElement) -> Void
+    ) {
+        guard depth <= 10, visited < 1_200 else { return }
+        visited += 1
+        visit(element)
+        guard let children: [AXUIElement] = copyAttribute(element, kAXChildrenAttribute) else { return }
+        for child in children { walk(child, depth: depth + 1, visited: &visited, visit: visit) }
+    }
+
+    private static func candidateScore(
+        _ frame: CGRect,
+        windowFrame: CGRect,
+        targetAspect: CGFloat
+    ) -> CGFloat? {
+        guard frame.width >= 160, frame.height >= 320,
+              frame.width < windowFrame.width * 0.98 || frame.height < windowFrame.height * 0.98,
+              windowFrame.insetBy(dx: -2, dy: -2).contains(frame) else { return nil }
+        let aspect = frame.width / frame.height
+        let error = min(abs(aspect - targetAspect) / targetAspect, abs(aspect - 1 / targetAspect) / (1 / targetAspect))
+        guard error <= 0.18 else { return nil }
+        let areaRatio = frame.width * frame.height / max(windowFrame.width * windowFrame.height, 1)
+        guard areaRatio >= 0.25 else { return nil }
+        return areaRatio * 1.4 - error * 2.2
+    }
+
+    private static func appKitFrame(from frame: CGRect) -> CGRect {
+        DesktopCoordinateSpace(mainDisplayHeight: CGDisplayBounds(CGMainDisplayID()).height)
+            .appKitFrame(fromQuartzTopLeft: frame)
     }
 }

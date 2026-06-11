@@ -4,10 +4,17 @@ final class BootedSimulatorResolver {
     private let logger: Logger
     private let loader: PrivateFrameworkLoader
     private let coreSimulatorFramework = "/Library/Developer/PrivateFrameworks/CoreSimulator.framework/CoreSimulator"
+    private var developerDirectory: String
 
     init(logger: Logger, loader: PrivateFrameworkLoader) {
         self.logger = logger
         self.loader = loader
+        self.developerDirectory = DeveloperDirectoryResolver().resolve(hostBundleURL: nil)?.developerDirectory
+            ?? "/Applications/Xcode.app/Contents/Developer"
+    }
+
+    func useDeveloperDirectory(_ path: String) {
+        developerDirectory = path
     }
 
     func listBootedSimulators() throws -> [BootedSimulatorRecord] {
@@ -25,7 +32,7 @@ final class BootedSimulatorResolver {
 
         let sharedSelector = loader.selector(named: "sharedServiceContextForDeveloperDir:error:")
         logTypeEncoding(simServiceContextClass, selector: "sharedServiceContextForDeveloperDir:error:", isClassMethod: true)
-        let developerDir = "/Applications/Xcode.app/Contents/Developer" as NSString
+        let developerDir = developerDirectory as NSString
         var contextErrorObject: AnyObject?
         guard let context = ObjCInvoker.classObjectPointer(
             simServiceContextClass,
