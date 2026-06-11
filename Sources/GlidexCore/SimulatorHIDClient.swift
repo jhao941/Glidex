@@ -2,12 +2,26 @@ import CGlidexShim
 import Dispatch
 import Foundation
 
+private final class HIDSendCompletionBox: @unchecked Sendable {
+    let handler: @Sendable (String?) -> Void
+
+    init(handler: @escaping @Sendable (String?) -> Void) {
+        self.handler = handler
+    }
+}
+
+private let hidSendCompletion: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?) -> Void = { context, errorCString in
+    guard let context else { return }
+    let box = Unmanaged<HIDSendCompletionBox>.fromOpaque(context).takeRetainedValue()
+    box.handler(errorCString.map(String.init(cString:)))
+}
+
 final class SimulatorHIDClient {
     let rawClient: AnyObject
 
     private let logger: Logger
 
-    private init(rawClient: AnyObject, logger: Logger) {
+    init(rawClient: AnyObject, logger: Logger) {
         self.rawClient = rawClient
         self.logger = logger
     }
@@ -29,17 +43,41 @@ final class SimulatorHIDClient {
         return hidClient
     }
 
-    func send(message: UnsafeMutableRawPointer, waitForCompletion: Bool = true) {
+    func send(
+        message: UnsafeMutableRawPointer,
+        waitForCompletion: Bool = true,
+        onCompletion: (@Sendable (String?) -> Void)? = nil
+    ) {
         let rawPointer = Unmanaged.passUnretained(rawClient).toOpaque()
         let errorCString: UnsafePointer<CChar>?
+        var completionContext: UnsafeMutableRawPointer?
         if waitForCompletion {
             errorCString = st_send_hid_message_sync(rawPointer, message, true, 1.0)
+            completionContext = nil
         } else {
-            errorCString = st_send_hid_message_async(rawPointer, message, true)
+            completionContext = onCompletion.map {
+                Unmanaged.passRetained(HIDSendCompletionBox(handler: $0)).toOpaque()
+            }
+            errorCString = st_send_hid_message_async(
+                rawPointer,
+                message,
+                true,
+                completionContext,
+                completionContext == nil ? nil : hidSendCompletion
+            )
         }
         if let errorCString {
             defer { free(UnsafeMutableRawPointer(mutating: errorCString)) }
-            logger.error("sendWithMessage completion error: \(String(cString: errorCString))")
+            let message = String(cString: errorCString)
+            logger.error("sendWithMessage completion error: \(message)")
+            if let completionContext {
+                let box = Unmanaged<HIDSendCompletionBox>.fromOpaque(completionContext).takeRetainedValue()
+                box.handler(message)
+            } else {
+                onCompletion?(message)
+            }
+        } else if waitForCompletion {
+            onCompletion?(nil)
         }
     }
 

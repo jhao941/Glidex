@@ -5,6 +5,18 @@ import Testing
 @Suite("Anchor lock")
 @MainActor
 struct AnchorLockTests {
+    @Test("anchor editing accepts down and drag but not hover or up")
+    func anchorEditingPhases() {
+        for mode in [CaptureInputMode.point, .edge] {
+            #expect(!AnchorEditingPolicy.accepts(.hover, mode: mode, isLocked: false))
+            #expect(AnchorEditingPolicy.accepts(.down, mode: mode, isLocked: false))
+            #expect(AnchorEditingPolicy.accepts(.drag, mode: mode, isLocked: false))
+            #expect(!AnchorEditingPolicy.accepts(.up, mode: mode, isLocked: false))
+            #expect(!AnchorEditingPolicy.accepts(.down, mode: mode, isLocked: true))
+        }
+        #expect(!AnchorEditingPolicy.accepts(.drag, mode: .navigate, isLocked: false))
+    }
+
     @Test("unlocked Point edits the anchor without injecting")
     func unlockedPointEditsOnly() {
         let sink = AnchorRecordingSink()

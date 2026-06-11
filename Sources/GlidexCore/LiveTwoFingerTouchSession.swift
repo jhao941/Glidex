@@ -12,6 +12,7 @@ public final class LiveTwoFingerTouchSession: @unchecked Sendable {
 
     private var isActive = false
     private var currentFingers: (CGPoint, CGPoint)?
+    public var onError: (@Sendable (String) -> Void)?
 
     init(hidClient: SimulatorHIDClient, metrics: ScreenMetrics, logger: Logger, dumpsHIDMessages: Bool) {
         self.hidClient = hidClient
@@ -90,10 +91,18 @@ public final class LiveTwoFingerTouchSession: @unchecked Sendable {
             )
             logTouchEventIfEnabled(description: description, direction: direction, fingers: fingers)
             logMessageIfEnabled(message)
-            hidClient.send(message: message, waitForCompletion: false)
+            hidClient.send(message: message, waitForCompletion: false) { [weak self] error in
+                guard let error else { return }
+                self?.reportFailure(description: description, message: error)
+            }
         } catch {
-            logger.error("\(description) failed: \(error)")
+            reportFailure(description: description, message: String(describing: error))
         }
+    }
+
+    private func reportFailure(description: String, message: String) {
+        logger.error("\(description) failed: \(message)")
+        onError?(message)
     }
 
     private func clamped(_ point: CGPoint) -> CGPoint {

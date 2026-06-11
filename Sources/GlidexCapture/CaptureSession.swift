@@ -102,13 +102,9 @@ final class CaptureSession {
             guard self?.canInjectInput == true else { return }
             self?.coordinator.endMouse(at: point)
         }
-        overlay.onMouseMoved = { [weak self] point in
+        overlay.onMouseMoved = { [weak self] _ in
             guard let self, canInjectInput else { return }
-            let snapshot = state.snapshot
-            if (snapshot.preferences.inputMode == .point || snapshot.preferences.inputMode == .edge),
-               snapshot.anchorLockState == .unlocked {
-                coordinator.updatePointer(point)
-            } else if isOptionPressed {
+            if isOptionPressed {
                 refreshOptionPreview()
             }
         }
@@ -214,6 +210,9 @@ final class CaptureSession {
                 fail(.hidInitialization("No compatible SimulatorKit found for \(tracked.descriptor.hostKind.rawValue)"), retry: true)
                 return
             }
+            logger.info(
+                "selected injection toolchain=\(resolution.developerDirectory) displayHost=\(tracked.descriptor.hostKind.rawValue) displayHostToolchain=\(tracked.descriptor.developerDirectory ?? "unknown")"
+            )
             try injector.useDeveloperDirectory(resolution)
             let target = try injector.selectTarget(udid: record.udid)
 

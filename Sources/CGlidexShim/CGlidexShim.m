@@ -127,7 +127,7 @@ const char *st_send_hid_message_sync(STObjCObject target, void *message, BOOL fr
     return NULL;
 }
 
-const char *st_send_hid_message_async(STObjCObject target, void *message, BOOL freeWhenDone) {
+const char *st_send_hid_message_async(STObjCObject target, void *message, BOOL freeWhenDone, void *context, STHIDSendCompletionFunc callback) {
     id object = (__bridge id)target;
     SEL selector = NSSelectorFromString(@"sendWithMessage:freeWhenDone:completionQueue:completion:");
     if (![object respondsToSelector:selector]) {
@@ -137,12 +137,14 @@ const char *st_send_hid_message_async(STObjCObject target, void *message, BOOL f
     typedef void (^CompletionBlock)(NSError *);
     typedef void (*SendFn)(id, SEL, void *, BOOL, dispatch_queue_t, CompletionBlock);
     SendFn fn = (SendFn)objc_msgSend;
-    CompletionBlock completion = ^(NSError *error) {
-        (void)error;
+    CompletionBlock completionBlock = ^(NSError *error) {
+        if (callback != NULL) {
+            callback(context, error == nil ? NULL : error.localizedDescription.UTF8String);
+        }
     };
 
     @try {
-        fn(object, selector, message, freeWhenDone, dispatch_get_main_queue(), completion);
+        fn(object, selector, message, freeWhenDone, dispatch_get_main_queue(), completionBlock);
     } @catch (NSException *exception) {
         return strdup(exception.reason.UTF8String ?: "");
     }

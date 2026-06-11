@@ -1,6 +1,6 @@
 import Foundation
 
-public final class IndigoTouchSink: DeviceAwareTouchSink {
+public final class IndigoTouchSink: DeviceAwareTouchSink, @unchecked Sendable {
     private enum ActiveSession {
         case single(LiveTouchSession)
         case twoFinger(LiveTwoFingerTouchSession)
@@ -57,11 +57,13 @@ public final class IndigoTouchSink: DeviceAwareTouchSink {
             switch snapshot.contacts.count {
             case 1:
                 let session = try reusableSingleSession ?? injector.makeLiveTouchSession()
+                session.onError = { [weak self] message in self?.onError?(message) }
                 reusableSingleSession = session
                 sessions[snapshot.gestureID] = .single(session)
                 session.begin(at: snapshot.contacts[0].point.cgPoint)
             case 2:
                 let session = try reusableTwoFingerSession ?? injector.makeLiveTwoFingerTouchSession()
+                session.onError = { [weak self] message in self?.onError?(message) }
                 reusableTwoFingerSession = session
                 sessions[snapshot.gestureID] = .twoFinger(session)
                 session.begin(

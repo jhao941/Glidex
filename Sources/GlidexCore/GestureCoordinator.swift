@@ -75,7 +75,7 @@ public final class GestureCoordinator {
 
     public func beginMouse(at point: CapturePoint) {
         guard mode != .disabled else { return }
-        if (mode == .point || mode == .edge) && !isAnchorLocked {
+        if AnchorEditingPolicy.accepts(.down, mode: mode, isLocked: isAnchorLocked) {
             updatePointer(point)
             return
         }
@@ -86,7 +86,7 @@ public final class GestureCoordinator {
     }
 
     public func updateMouse(at point: CapturePoint) {
-        if (mode == .point || mode == .edge) && !isAnchorLocked {
+        if AnchorEditingPolicy.accepts(.drag, mode: mode, isLocked: isAnchorLocked) {
             updatePointer(point)
             return
         }
