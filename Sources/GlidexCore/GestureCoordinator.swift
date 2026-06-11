@@ -242,10 +242,11 @@ public final class GestureCoordinator {
 
     private func navigationPoint(for gesture: InterpretedGesture, anchor: SimulatorPoint) -> SimulatorPoint {
         let gain = InputTuning.stable.navigationGain
-        return SimulatorPoint(
+        let point = SimulatorPoint(
             x: anchor.x + (gesture.centroid.x - gesture.initialCentroid.x) * mapper.simulatorSize.width * gain,
             y: anchor.y + (gesture.initialCentroid.y - gesture.centroid.y) * mapper.simulatorSize.height * gain
         )
+        return mode == .edge ? mapper.clamped(point) : point
     }
 
     public func capturePointForVirtualFinger() -> CapturePoint? {

@@ -1,6 +1,5 @@
 #import "IndigoMessageBuilder.h"
 
-#import <dlfcn.h>
 #import <mach/mach_time.h>
 #import <malloc/malloc.h>
 #import <stddef.h>
@@ -10,7 +9,7 @@ static const unsigned int STButtonEventTypeUp = 0x2;
 static const unsigned int STTouchTarget = 0x32;
 static const size_t STIndigoPayloadSize = 0xA0;
 static const size_t STSingleTouchMessageSize = offsetof(IndigoMessage, payload) + (STIndigoPayloadSize * 2);
-static const char *STSimulatorKitPath = "/Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit";
+static STIndigoMessageForMouseNSEventFunc STMouseFactory = NULL;
 
 #pragma mark - IndigoMessageBuilder
 
@@ -22,19 +21,15 @@ static CGPoint st_screenRatioFromPoint(CGPoint point, CGSize screenPointSize) {
     return CGPointMake(point.x / screenPointSize.width, point.y / screenPointSize.height);
 }
 
+void st_set_indigo_mouse_factory(void *function) {
+    STMouseFactory = (STIndigoMessageForMouseNSEventFunc)function;
+}
+
 static STIndigoMessageForMouseNSEventFunc st_lookup_mouse_factory(const char **errorOut) {
-    void *handle = dlopen(STSimulatorKitPath, RTLD_NOW | RTLD_LOCAL);
-    if (handle == NULL) {
-        if (errorOut != NULL) {
-            *errorOut = strdup(dlerror());
-        }
-        return NULL;
+    if (STMouseFactory == NULL && errorOut != NULL) {
+        *errorOut = strdup("IndigoHIDMessageForMouseNSEvent not configured by the selected SimulatorKit loader");
     }
-    void *symbol = dlsym(handle, "IndigoHIDMessageForMouseNSEvent");
-    if (symbol == NULL && errorOut != NULL) {
-        *errorOut = strdup("IndigoHIDMessageForMouseNSEvent not resolved in SimulatorKit handle");
-    }
-    return (STIndigoMessageForMouseNSEventFunc)symbol;
+    return STMouseFactory;
 }
 
 static IndigoMessage *st_touch_message_with_payload(IndigoTouch *payload, size_t *messageSizeOut) {

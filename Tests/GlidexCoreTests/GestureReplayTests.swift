@@ -42,6 +42,12 @@ struct GestureReplayTests {
             return
         }
         #expect(snapshot.anchor.x == 1)
+        for event in events {
+            for contact in event.snapshot?.contacts ?? [] {
+                #expect(contact.point.x >= 0 && contact.point.x <= 402)
+                #expect(contact.point.y >= 0 && contact.point.y <= 874)
+            }
+        }
     }
 
     @Test("single-finger noise produces no transaction")

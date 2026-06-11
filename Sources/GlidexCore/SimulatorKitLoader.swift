@@ -1,3 +1,4 @@
+import CGlidexShim
 import Foundation
 
 final class SimulatorKitLoader {
@@ -33,14 +34,31 @@ final class SimulatorKitLoader {
             ?? "/Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit"
     }
 
-    func useFramework(at path: String) {
+    func useFramework(at path: String) throws {
+        switch SimulatorKitFrameworkSwitch.decide(loadedPath: framework?.path, requestedPath: path) {
+        case .useRequested:
+            break
+        case .alreadySelected:
+            return
+        case let .incompatibleLoadedFramework(loadedPath):
+            throw GlidexError.frameworkLoadFailed(
+                "SimulatorKit is already loaded from \(loadedPath); switching to \(path) requires restarting Glidex"
+            )
+        }
         guard frameworkPath != path else { return }
         frameworkPath = path
         framework = nil
     }
 
     func load() throws {
-        framework = try loader.loadFramework(at: frameworkPath)
+        let loadedFramework = try loader.loadFramework(at: frameworkPath)
+        let mouseFactory = try loader.symbol(
+            named: "IndigoHIDMessageForMouseNSEvent",
+            in: loadedFramework,
+            as: IndigoHIDMessageForMouseNSEventFn.self
+        )
+        st_set_indigo_mouse_factory(unsafeBitCast(mouseFactory, to: UnsafeMutableRawPointer.self))
+        framework = loadedFramework
     }
 
     func probe() throws {

@@ -74,6 +74,22 @@ struct SimulatorDisplayHostTests {
         #expect(result?.simulatorKitPath == betaKit)
     }
 
+    @Test("a loaded SimulatorKit cannot switch Xcode roots in one process")
+    func loadedFrameworkSwitchIsRejected() {
+        #expect(SimulatorKitFrameworkSwitch.decide(
+            loadedPath: "/Xcode-beta/SimulatorKit",
+            requestedPath: "/Xcode-beta/SimulatorKit"
+        ) == .alreadySelected)
+        #expect(SimulatorKitFrameworkSwitch.decide(
+            loadedPath: nil,
+            requestedPath: "/Xcode/SimulatorKit"
+        ) == .useRequested)
+        #expect(SimulatorKitFrameworkSwitch.decide(
+            loadedPath: "/Xcode-beta/SimulatorKit",
+            requestedPath: "/Xcode/SimulatorKit"
+        ) == .incompatibleLoadedFramework("/Xcode-beta/SimulatorKit"))
+    }
+
     private func descriptor(
         host: SimulatorDisplayHostKind,
         pid: pid_t,

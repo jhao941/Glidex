@@ -3,6 +3,10 @@ import Testing
 
 @Suite("Status item presentation")
 struct StatusItemPresentationTests {
+    @Test("menu bar symbols use macOS template rendering")
+    func templateRendering() {
+        #expect(StatusItemPresentation(snapshot: GlidexAppSnapshot()).usesTemplateImage)
+    }
     @Test("runtime states use distinguishable symbols")
     func distinctSymbols() {
         let statuses: [GlidexRuntimeStatus] = [

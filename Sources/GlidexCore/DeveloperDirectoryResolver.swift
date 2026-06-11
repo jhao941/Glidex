@@ -5,6 +5,17 @@ public struct DeveloperDirectoryResolution: Equatable, Sendable {
     public var simulatorKitPath: String
 }
 
+public enum SimulatorKitFrameworkSwitch: Equatable, Sendable {
+    case useRequested
+    case alreadySelected
+    case incompatibleLoadedFramework(String)
+
+    public static func decide(loadedPath: String?, requestedPath: String) -> SimulatorKitFrameworkSwitch {
+        guard let loadedPath else { return .useRequested }
+        return loadedPath == requestedPath ? .alreadySelected : .incompatibleLoadedFramework(loadedPath)
+    }
+}
+
 public struct DeveloperDirectoryResolver {
     private let fileExists: (String) -> Bool
     private let selectedDeveloperDirectory: () -> String?

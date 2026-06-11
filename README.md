@@ -10,15 +10,15 @@ Current scope:
 - inject `tap`, `drag`, and `pinch` through Indigo HID
 - capture raw trackpad frames through MultitouchSupport
 - map mouse and two-finger trackpad input through a testable transaction pipeline
-- attach and follow the visible Simulator screen region through CGWindow and Accessibility APIs
+- attach to either Xcode 27 Device Hub or the legacy Simulator app through Accessibility APIs
 - run as an accessory app with a transparent, border-only input overlay
-- persist enablement, input mode, border visibility, and touch-indicator preferences
+- persist enablement, input mode, anchor lock preference, border visibility, and independent indicator preferences
 
 Current non-goals:
 
 - no public/private-API compatibility guarantee across macOS and Xcode releases
 - no complete onboarding, signing, or distribution workflow
-- no guarantee yet for every device orientation, display scale, or multiple simultaneously booted simulators
+- no compatibility guarantee for future private-framework ABI changes
 
 ## Layout
 
@@ -54,6 +54,8 @@ Key files:
 
 - `Sources/GlidexCore/BootedSimulatorResolver.swift`: booted simulator discovery, `simctl` fallback, and CoreSimulator probing
 - `Sources/GlidexCore/SimulatorKitLoader.swift`: dynamic loading and Indigo symbol resolution
+- `Sources/GlidexCore/DeveloperDirectoryResolver.swift`: host-Xcode, `xcode-select`, and standard Xcode resolution
+- `Sources/GlidexCore/SimulatorDisplayHost.swift`: shared host descriptors and unambiguous booted-device matching
 - `Sources/GlidexCore/IndigoHIDBackend.swift`: current injection backend
 - `Sources/GlidexCore/SimulatorInjector.swift`: command orchestration
 - `Sources/GlidexCore/GestureSynthesizer.swift`: higher-level gesture sequencing
@@ -65,7 +67,7 @@ Key files:
 - `Sources/GlidexCapture/CaptureSession.swift`: automatic attachment, raw stream lifetime, error recovery, and coordinator wiring
 - `Sources/GlidexCapture/OverlayWindowController.swift`: transparent window geometry, passthrough, and calibration
 - `Sources/GlidexCapture/CaptureView.swift`: border/touch-indicator drawing and AppKit responder entry points
-- `Sources/GlidexCapture/SimulatorWindowTracker.swift`: Simulator window and screen-region tracking
+- `Sources/GlidexCapture/SimulatorWindowTracker.swift`: Device Hub and legacy Simulator host adapters and screen-region tracking
 - `Sources/CGlidexShim/*`: tiny C shim for Objective-C runtime method enumeration and message construction helpers
 
 ## Build
@@ -93,31 +95,37 @@ swift run glidex pinch --center 200,400 --scale 0.8 --duration 0.5
 swift run glidex-capture
 ```
 
-Glidex starts as an accessory app with no Dock icon and no debug window. When Accessibility permission is available, it finds an unambiguous visible Simulator, resolves the matching booted device, and places a transparent overlay exactly over the simulated screen region. If Simulator is absent it waits; if multiple candidates cannot be matched it reports an error instead of choosing the first one.
+Glidex starts as an accessory app with no Dock icon and no debug window. When Accessibility permission is available, it discovers displays from Xcode 27 Device Hub (`com.apple.dt.Devices`) and the legacy Simulator app (`com.apple.iphonesimulator`). Device Hub uses its `iOSContentGroup` as the display region and prefers an exact CoreDevice UDID match. Legacy Simulator retains its AX region and aspect-ratio fallback. If both hosts are visible, an exact UDID match wins; otherwise ambiguous candidates are rejected instead of choosing the first one.
+
+Private framework loading follows the selected host's containing Xcode first, then `xcode-select`, then standard Xcode locations. This supports Device Hub's Xcode-level `SharedFrameworks/SimulatorKit.framework` layout without permanently assuming `/Applications/Xcode.app`.
 
 The menu bar controls provide:
 
 - enable/pause with safe input passthrough
 - Navigate, Point, and Edge modes (Navigate is the default)
 - Hidden, Subtle, Normal, and Strong border visibility
-- optional touch indicator
+- Lock Anchor / Edit Anchor Position in Point and Edge modes
+- independent Show Anchor Indicator and Show Active Touches switches
 - reattach, calibration, diagnostics, settings, and quit actions
 
 In Navigate mode, hold Option when a raw trackpad gesture begins to anchor only that gesture at the current mouse position inside the Simulator. The modifier, desktop mouse position, converted Simulator point, and final anchor policy are latched once at gesture begin. Releasing Option mid-gesture does not move or cancel the transaction. A pointer outside the Simulator safely falls back to ordinary Navigate behavior.
 
-Point remains a persistent fixed virtual-finger anchor. Edge chooses the nearest edge from that fixed point. Ordinary mouse hover does not move either persistent anchor.
+Point and Edge have an explicit lock state rather than another input mode. Unlocked edits the fixed anchor and does not inject mouse input; its orange dashed border makes that ownership visible. Locked keeps the anchor fixed while ordinary mouse tap/drag works normally. Switching the lock cancels any active transaction. Device attachment safely starts unlocked.
+
+Edge chooses the nearest edge from the fixed anchor. Leading/trailing preserve the anchor's exact vertical position, while top/bottom preserve its horizontal position; the raw gesture centroid no longer changes the along-edge coordinate.
 
 The overlay supports:
 
 - click and drag -> live single-touch transaction
 - two-finger movement -> live navigation transaction
 - finger separation -> live two-contact pinch transaction
-- a movable virtual-finger marker for Point and Edge anchoring
+- an Anchor Indicator for Point/Edge anchors and Navigate+Option temporary anchors
+- Active Touch indicators sourced from actual `TouchTransaction` begin/update/end/cancel events
 - calibration mode: drag the overlay to move it or drag its lower-right corner to resize it
 
 The window itself always remains fully opaque at the compositor level (`alphaValue = 1`). Only the inset border is drawn, so lowering border visibility never makes Simulator content dim or washed out. Paused and error states cancel active transactions before enabling click-through.
 
-Simulator lifecycle recovery uses Accessibility notifications for immediate window changes and a low-frequency health poll for window closure, app restart, and missed notifications. Geometry changes synchronously update the selected target, overlay frame, oriented screen metrics, and `CoordinateMapper`. Quartz/AppKit conversion uses the main display's global coordinate basis and supports displays positioned to either side or above the main display.
+Simulator lifecycle recovery uses Accessibility moved, resized, destroyed, and layout-changed notifications plus a low-frequency health poll. Device Hub caches its `iOSContentGroup` and rebuilds the AX lookup only when that element becomes invalid. Geometry changes synchronously cancel active input and update the selected target, overlay frame, oriented screen metrics, and `CoordinateMapper`. Quartz/AppKit conversion uses the main display's global coordinate basis and supports displays positioned to either side or above the main display.
 
 The default raw-touch path follows the stable behavior established by commit `eb4da18` (`Make raw touch the default capture path`). Navigate uses the raw gesture centroid and is independent of mouse position. Point uses the explicitly moved virtual finger. Edge gestures are produced only in Edge mode and use the nearest edge to that marker.
 
@@ -127,7 +135,7 @@ Input flows through explicit boundaries:
 TouchSource -> GestureInterpreter -> AnchorPolicy -> TouchTransaction -> TouchSink
 ```
 
-The gesture interpreter, coordinate mapper, anchor policy, overlay policy, target selection, and transaction lifecycle are pure logic covered by Swift Testing. `CaptureView` owns only AppKit responder events and drawing. Mouse events use one responder path; there is no parallel local event monitor or timestamp-based deduplication.
+The gesture interpreter, coordinate mapper, host/target selection, anchor policy, indicator lifecycle, overlay policy, and transaction lifecycle are pure logic covered by Swift Testing. `CaptureView` owns only AppKit responder events and drawing. Mouse events use one responder path; there is no parallel local event monitor or timestamp-based deduplication.
 
 Raw-frame fixtures replay through the production `GestureCoordinator`; see [`docs/v1-input-validation.md`](docs/v1-input-validation.md) for the automated/manual validation boundary.
 The menu bar and lifecycle validation record is in [`docs/menu-bar-validation.md`](docs/menu-bar-validation.md).
@@ -158,18 +166,18 @@ What is implemented:
     - `sendWithMessage:freeWhenDone:completionQueue:completion:`
 - the capture app
   - runs from the menu bar as an accessory application
-  - automatically attaches to one unambiguous visible Simulator screen
+  - automatically attaches to one unambiguous Device Hub or legacy Simulator screen
   - consumes MultitouchSupport raw frames through `RawTouchStream`
   - injects through an `IndigoTouchSink`
   - emits structured touch lifecycle logs containing gesture ID, source, intent, anchor, phase, and contacts
   - releases active transactions before pause, error passthrough, target change, raw-stream stop, and shutdown
 
-What is not yet verified:
+What still needs broader compatibility coverage:
 
 - robust behavior across multiple booted simulators
-- coordinate mapping across device types, orientations, and simulator scale factors
+- additional Xcode 27 beta builds if Device Hub AX metadata or private symbols change
 - multi-contact pinch behavior across apps such as Maps, Photos, and Safari
-- foreground, background, and hidden Simulator.app behavior across macOS/Xcode versions
+- foreground, background, and hidden host behavior across more macOS/Xcode combinations
 
 ## Backend hypotheses
 
@@ -248,12 +256,13 @@ Set `GLIDEX_DUMP_HID_MESSAGES=1` only when debugging raw Indigo message layout. 
 Recommended manual commands:
 
 ```bash
-nm -gU /Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit | rg 'Indigo|LegacyHID|SimDeviceScreen'
-strings /Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit | rg 'SimDeviceLegacyHIDClient|send|device|screen'
+SIMULATOR_KIT=/Applications/Xcode-beta.app/Contents/SharedFrameworks/SimulatorKit.framework/SimulatorKit
+nm -gU "$SIMULATOR_KIT" | rg 'Indigo|LegacyHID|SimDeviceScreen'
+strings "$SIMULATOR_KIT" | rg 'SimDeviceLegacyHIDClient|send|device|screen'
 nm -gU /Library/Developer/PrivateFrameworks/CoreSimulator.framework/CoreSimulator | rg 'SimServiceContext|SimDeviceSet|SimDeviceIO'
 swift-demangle '$s12SimulatorKit24SimDeviceLegacyHIDClientC6deviceACSo0cD0C_tKcfC'
 swift-demangle '$s12SimulatorKit24SimDeviceLegacyHIDClientC4send7messageySpySo22IndigoHIDMessageStructVG_tF'
-otool -L /Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit
+otool -L "$SIMULATOR_KIT"
 ```
 
 Suggested LLDB targets:
@@ -273,4 +282,4 @@ Useful LLDB ideas:
 
 ## Next architecture checkpoint
 
-The next product-facing work can build on `GlidexAppState`, `CaptureSession`, `TouchSource`, `AnchorPolicy`, and `TouchSink` without moving private ABI code into the UI layer. Likely integration points are orientation-aware screen metrics, a first-run permission flow, explicit target selection for genuinely ambiguous multi-window setups, and signed app packaging.
+The next product-facing work can build on `GlidexAppState`, `CaptureSession`, `SimulatorDisplayHost`, `TouchSource`, `AnchorPolicy`, and `TouchSink` without moving private ABI code into the UI layer. Likely integration points are a first-run permission flow, an explicit target picker for genuine ambiguity, broader Device Hub version probes, and signed app packaging.

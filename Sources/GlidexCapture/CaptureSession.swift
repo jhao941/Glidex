@@ -168,6 +168,9 @@ final class CaptureSession {
         installModifierMonitors()
 
         let displays = windowTracker.discoverTargets(simulatorSize: Self.fallbackSimulatorSize.cgSize)
+        if !displays.isEmpty {
+            logger.info("discovered display hosts: \(displays.map { "\($0.descriptor.hostKind.rawValue):\($0.descriptor.deviceUDID ?? "unknown")" }.joined(separator: ","))")
+        }
         guard !displays.isEmpty else {
             wait(reason: "Looking for Simulator window")
             return
@@ -211,7 +214,7 @@ final class CaptureSession {
                 fail(.hidInitialization("No compatible SimulatorKit found for \(tracked.descriptor.hostKind.rawValue)"), retry: true)
                 return
             }
-            injector.useDeveloperDirectory(resolution)
+            try injector.useDeveloperDirectory(resolution)
             let target = try injector.selectTarget(udid: record.udid)
 
             nativeTarget = target

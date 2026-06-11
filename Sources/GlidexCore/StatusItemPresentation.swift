@@ -3,6 +3,7 @@ import Foundation
 public struct StatusItemPresentation: Equatable, Sendable {
     public var symbolName: String
     public var optionAnchorText: String
+    public var usesTemplateImage: Bool { true }
 
     public init(snapshot: GlidexAppSnapshot) {
         self.symbolName = Self.symbolName(for: snapshot.status)

@@ -10,6 +10,8 @@ final class AppController: NSObject, NSApplicationDelegate {
     private let overlayWindowController: OverlayWindowController
     private var captureSession: CaptureSession?
     private var stateObserver: UUID?
+    private var lastSavedPreferences: GlidexPreferenceValues?
+    private var lastLoggedState: String?
 
     init(logger: Logger) {
         self.logger = logger
@@ -34,10 +36,16 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     func start() {
         stateObserver = state.observe { [weak self] snapshot in
-            self?.preferences.save(snapshot.preferences)
-            self?.logger.info(
-                "app status=\(snapshot.status.title) enabled=\(snapshot.preferences.isEnabled) mode=\(snapshot.preferences.inputMode.rawValue) optionAnchor=\(self?.optionAnchorLogValue(snapshot.optionAnchorAvailability) ?? "unknown") target=\(snapshot.target?.udid ?? "none")"
-            )
+            guard let self else { return }
+            if lastSavedPreferences != snapshot.preferences {
+                preferences.save(snapshot.preferences)
+                lastSavedPreferences = snapshot.preferences
+            }
+            let logState = "app status=\(snapshot.status.title) enabled=\(snapshot.preferences.isEnabled) mode=\(snapshot.preferences.inputMode.rawValue) anchorLock=\(snapshot.anchorLockState.rawValue) anchorIndicator=\(snapshot.preferences.showsAnchorIndicator) activeTouchIndicator=\(snapshot.preferences.showsActiveTouches) activeTouches=\(snapshot.activeTouches.count) optionAnchor=\(optionAnchorLogValue(snapshot.optionAnchorAvailability)) target=\(snapshot.target?.udid ?? "none")"
+            if lastLoggedState != logState {
+                logger.info(logState)
+                lastLoggedState = logState
+            }
         }
         captureSession?.start()
         logger.info("Glidex menu bar app ready")

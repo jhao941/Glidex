@@ -29,6 +29,7 @@ const char *st_getObjCTypeDescription(STObjCObject obj);
 const char *st_copyMethodTypeEncoding(Class cls, const char *selectorName, BOOL isClassMethod);
 STObjCObject st_invokeObjectObjectUnsignedLongLongCatching(STObjCObject target, SEL selector, STObjCObject arg1, unsigned long long arg2, const char **exceptionOut);
 void st_invokeVoidPointerBoolPointerBlockCatching(STObjCObject target, SEL selector, const void *arg1, BOOL arg2, STObjCObject arg3, STObjCObject arg4, const char **exceptionOut);
+void st_set_indigo_mouse_factory(void *function);
 void *st_create_indigo_touch_message(CGPoint point, CGSize screenPointSize, int direction, size_t *messageSizeOut, const char **errorOut);
 void *st_create_indigo_two_finger_touch_message(CGPoint finger1, CGPoint finger2, CGSize screenPointSize, int direction, size_t *messageSizeOut, const char **errorOut);
 const char *st_send_hid_message_sync(STObjCObject target, void *message, BOOL freeWhenDone, double timeoutSeconds);

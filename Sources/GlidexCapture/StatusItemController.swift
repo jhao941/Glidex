@@ -38,11 +38,13 @@ final class StatusItemController: NSObject {
 
     private func render(_ snapshot: GlidexAppSnapshot) {
         let presentation = StatusItemPresentation(snapshot: snapshot)
-        statusItem.button?.image = NSImage(
+        let image = NSImage(
             systemSymbolName: presentation.symbolName,
             accessibilityDescription: "Glidex \(snapshot.status.title)"
         )
-        statusItem.button?.contentTintColor = statusColor(for: snapshot.status)
+        image?.isTemplate = presentation.usesTemplateImage
+        statusItem.button?.image = image
+        statusItem.button?.contentTintColor = nil
         statusItem.button?.toolTip = "Glidex: \(snapshot.status.title)"
 
         let menu = NSMenu()
@@ -105,15 +107,6 @@ final class StatusItemController: NSObject {
         case .active: "Active"
         case .paused: "Paused"
         case let .error(error): "Error — \(error.message)"
-        }
-    }
-
-    private func statusColor(for status: GlidexRuntimeStatus) -> NSColor {
-        switch status {
-        case .active: .systemGreen
-        case .waiting, .connecting: .systemYellow
-        case .error: .systemRed
-        case .paused: .secondaryLabelColor
         }
     }
 

@@ -34,3 +34,22 @@ These checks require a person using the physical trackpad and are not replaced b
 3. Release Option during a continuing gesture; the contact must remain continuous and anchored.
 4. Point remains fixed across repeated gestures; Edge uses the nearest edge to that fixed point.
 5. Pause during an active gesture and confirm exactly one release with immediate mouse passthrough.
+
+## Device Hub And Anchor Lock - June 11, 2026
+
+Validated with Xcode 27 beta Device Hub (`com.apple.dt.Devices`), legacy Simulator from Xcode 26.5, and booted iPhone 16 Pro `53CC2D84-516F-4DF5-9FF9-CDD32B610B77`.
+
+- Device Hub discovery found `AXGroup` / `iOSContentGroup`, read the CoreDevice UDID, and exactly matched the booted simulator.
+- The selected developer directory was `/Applications/Xcode-beta.app/Contents/Developer`; SimulatorKit loaded from Xcode beta `Contents/SharedFrameworks`.
+- Hiding/showing Device Hub's sidebar moved the content frame between x=614 and x=734; the Glidex overlay followed the same frame.
+- Hiding the Inspector moved the content frame to x=874; the overlay again matched it after AX notification/health polling.
+- Device Hub Zoom In and Zoom Out commands completed without losing attachment. This window was already at a constrained display size, so those commands did not change the measured content frame.
+- With Device Hub and legacy Simulator visible together, discovery reported both hosts and selected Device Hub because it had the exact UDID.
+- After a real Device Hub click loaded Xcode beta SimulatorKit, quitting Device Hub cancelled old input and discovered only legacy Simulator. Glidex entered Error instead of loading Xcode 26.5 SimulatorKit into the same process; reopening Device Hub recovered to Active.
+- Point Unlocked accepted a mouse-position edit and a click produced no touch transaction. Lock Anchor then restored a mouse begin/end transaction at the clicked simulator coordinate.
+- Edge Locked produced a real raw-trackpad transaction with `intent=edge`, a fixed trailing-edge anchor `401,436.4`, repeated updates, and one end.
+- Active Touch state changed from zero to one on real raw and mouse begins and returned to zero on end. Pinch two-contact rendering remains covered by the observing-sink lifecycle test.
+- Anchor and Active Touch menu switches are independent and old `showsTouchIndicator` data migrates to both.
+- Status symbols use template rendering and no fixed `contentTintColor`; visual light/dark menu-bar confirmation remains manual because screen capture permission was unavailable in this session.
+
+Known compatibility boundary: once one Xcode's SimulatorKit has been loaded into Glidex, switching to a host owned by another Xcode requires restarting Glidex. The app now reports this explicitly instead of loading duplicate Objective-C classes into one process.
