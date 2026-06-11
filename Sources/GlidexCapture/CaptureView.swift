@@ -84,6 +84,15 @@ final class CaptureView: NSView {
             border.stroke()
             return
         }
+        if presentation.anchorLockState == .unlocked,
+           presentation.inputMode == .point || presentation.inputMode == .edge {
+            NSColor.systemOrange.withAlphaComponent(max(0.7, presentation.borderAlpha)).setStroke()
+            let border = NSBezierPath(rect: bounds.insetBy(dx: 2.5, dy: 2.5))
+            border.lineWidth = 3
+            border.setLineDash([7, 5], count: 2, phase: 0)
+            border.stroke()
+            return
+        }
         borderColor.withAlphaComponent(presentation.borderAlpha).setStroke()
         let inset: CGFloat = 1.5
         let border = NSBezierPath(rect: bounds.insetBy(dx: inset, dy: inset))

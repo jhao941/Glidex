@@ -7,6 +7,7 @@ final class StatusItemController: NSObject {
     var onSetMode: ((CaptureInputMode) -> Void)?
     var onSetBorderVisibility: ((BorderVisibility) -> Void)?
     var onSetShowsTouchIndicator: ((Bool) -> Void)?
+    var onSetAnchorLocked: ((Bool) -> Void)?
     var onSetCalibrationMode: ((Bool) -> Void)?
     var onReattach: (() -> Void)?
     var onDiagnostics: (() -> Void)?
@@ -60,6 +61,12 @@ final class StatusItemController: NSObject {
             selected: snapshot.preferences.inputMode,
             selector: #selector(selectMode(_:))
         ))
+        if snapshot.preferences.inputMode == .point || snapshot.preferences.inputMode == .edge {
+            menu.addItem(actionItem(
+                snapshot.anchorLockState == .locked ? "Edit Anchor Position" : "Lock Anchor",
+                action: #selector(toggleAnchorLock(_:))
+            ))
+        }
         menu.addItem(submenuItem(
             title: "Border Visibility",
             values: BorderVisibility.allCases,
@@ -164,6 +171,10 @@ final class StatusItemController: NSObject {
 
     @objc private func toggleTouchIndicator(_ sender: NSMenuItem) {
         onSetShowsTouchIndicator?(sender.state != .on)
+    }
+
+    @objc private func toggleAnchorLock(_ sender: NSMenuItem) {
+        onSetAnchorLocked?(state.snapshot.anchorLockState != .locked)
     }
 
     @objc private func toggleCalibration(_ sender: NSMenuItem) {

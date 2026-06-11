@@ -60,6 +60,9 @@ final class AppController: NSObject, NSApplicationDelegate {
         statusItemController.onSetShowsTouchIndicator = { [weak state] shows in
             state?.setShowsTouchIndicator(shows)
         }
+        statusItemController.onSetAnchorLocked = { [weak state] locked in
+            state?.setAnchorLocked(locked)
+        }
         statusItemController.onSetCalibrationMode = { [weak state] enabled in
             state?.setCalibrationMode(enabled)
         }

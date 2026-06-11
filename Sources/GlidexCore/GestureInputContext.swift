@@ -57,10 +57,11 @@ public struct GestureInputContext: Equatable, Sendable {
         case .point:
             policy = .point(fixedPoint)
         case .edge:
-            policy = .edge(AnchorPolicy.nearestEdge(
-                to: fixedPoint ?? fallback,
-                simulatorSize: simulatorSize
-            ))
+            let edgePoint = fixedPoint ?? fallback
+            policy = .edge(
+                AnchorPolicy.nearestEdge(to: edgePoint, simulatorSize: simulatorSize),
+                fixedPoint: edgePoint
+            )
         case .disabled:
             policy = .navigate
         }

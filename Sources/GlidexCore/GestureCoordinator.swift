@@ -14,6 +14,7 @@ public final class GestureCoordinator {
     private var pinchCurrentRadius: CGFloat = 72
 
     public private(set) var mode: CaptureInputMode = .navigate
+    public private(set) var isAnchorLocked = false
     public private(set) var virtualFingerPoint: SimulatorPoint?
     public private(set) var activeGestureContext: GestureInputContext?
     public var onStateChange: (() -> Void)?
@@ -46,7 +47,7 @@ public final class GestureCoordinator {
     }
 
     public func updatePointer(_ point: CapturePoint) {
-        guard mode == .point || mode == .edge,
+        guard !isAnchorLocked, mode == .point || mode == .edge,
               let simulatorPoint = mapper.simulatorPoint(fromCapture: point) else { return }
         lastMousePoint = simulatorPoint
         virtualFingerPoint = simulatorPoint
@@ -57,12 +58,21 @@ public final class GestureCoordinator {
         guard self.mode != mode else { return }
         cancelAll(reason: "input mode changed")
         self.mode = mode
+        if mode == .navigate || mode == .disabled { isAnchorLocked = false }
+        onStateChange?()
+    }
+
+    public func setAnchorLocked(_ locked: Bool) {
+        let effective = (mode == .point || mode == .edge) && locked
+        guard isAnchorLocked != effective else { return }
+        cancelAll(reason: "anchor lock changed")
+        isAnchorLocked = effective
         onStateChange?()
     }
 
     public func beginMouse(at point: CapturePoint) {
         guard mode != .disabled else { return }
-        if mode == .point || mode == .edge {
+        if (mode == .point || mode == .edge) && !isAnchorLocked {
             updatePointer(point)
             return
         }
@@ -73,7 +83,7 @@ public final class GestureCoordinator {
     }
 
     public func updateMouse(at point: CapturePoint) {
-        if mode == .point || mode == .edge {
+        if (mode == .point || mode == .edge) && !isAnchorLocked {
             updatePointer(point)
             return
         }
@@ -83,7 +93,7 @@ public final class GestureCoordinator {
     }
 
     public func endMouse(at point: CapturePoint?) {
-        if mode == .point || mode == .edge || mode == .disabled { return }
+        if ((mode == .point || mode == .edge) && !isAnchorLocked) || mode == .disabled { return }
         guard let point, let simulatorPoint = mapper.projectedSimulatorPoint(fromCapture: point) else {
             handleMouseAction(mouseState.cancel())
             return

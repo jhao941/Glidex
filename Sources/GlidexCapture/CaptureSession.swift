@@ -97,7 +97,11 @@ final class CaptureSession {
         }
         overlay.onMouseMoved = { [weak self] point in
             guard let self, canInjectInput else { return }
-            if isOptionPressed {
+            let snapshot = state.snapshot
+            if (snapshot.preferences.inputMode == .point || snapshot.preferences.inputMode == .edge),
+               snapshot.anchorLockState == .unlocked {
+                coordinator.updatePointer(point)
+            } else if isOptionPressed {
                 refreshOptionPreview()
             }
         }
@@ -123,6 +127,7 @@ final class CaptureSession {
 
     private func apply(_ snapshot: GlidexAppSnapshot) {
         coordinator.setMode(snapshot.preferences.inputMode)
+        coordinator.setAnchorLocked(snapshot.anchorLockState == .locked)
         refreshOptionPreview()
 
         let becameEnabled = snapshot.preferences.isEnabled && !lastEnabled
@@ -206,6 +211,7 @@ final class CaptureSession {
             let target = try injector.selectTarget(udid: record.udid)
 
             nativeTarget = target
+            state.resetAnchorLockForAttachment()
             lastSimulatorPID = tracked.ownerPID
             lastHostTarget = tracked
             frameAdjustment = OverlayFrameAdjustment()

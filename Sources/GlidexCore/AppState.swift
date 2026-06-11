@@ -74,25 +74,62 @@ public enum OptionAnchorAvailability: Equatable, Sendable {
     }
 }
 
+public enum AnchorLockState: String, Equatable, Sendable {
+    case unavailable
+    case unlocked
+    case locked
+}
+
 public struct GlidexPreferenceValues: Codable, Equatable, Sendable {
     public var isEnabled: Bool
     public var inputMode: CaptureInputMode
     public var borderVisibility: BorderVisibility
     public var showsTouchIndicator: Bool
+    public var prefersAnchorLocked: Bool
 
     public init(
         isEnabled: Bool = true,
         inputMode: CaptureInputMode = .navigate,
         borderVisibility: BorderVisibility = .subtle,
-        showsTouchIndicator: Bool = true
+        showsTouchIndicator: Bool = true,
+        prefersAnchorLocked: Bool = false
     ) {
         self.isEnabled = isEnabled
         self.inputMode = inputMode == .disabled ? .navigate : inputMode
         self.borderVisibility = borderVisibility
         self.showsTouchIndicator = showsTouchIndicator
+        self.prefersAnchorLocked = prefersAnchorLocked
     }
 
     public static let defaults = GlidexPreferenceValues()
+
+    private enum CodingKeys: String, CodingKey {
+        case isEnabled
+        case inputMode
+        case borderVisibility
+        case showsTouchIndicator
+        case prefersAnchorLocked
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            isEnabled: try values.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true,
+            inputMode: try values.decodeIfPresent(CaptureInputMode.self, forKey: .inputMode) ?? .navigate,
+            borderVisibility: try values.decodeIfPresent(BorderVisibility.self, forKey: .borderVisibility) ?? .subtle,
+            showsTouchIndicator: try values.decodeIfPresent(Bool.self, forKey: .showsTouchIndicator) ?? true,
+            prefersAnchorLocked: try values.decodeIfPresent(Bool.self, forKey: .prefersAnchorLocked) ?? false
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(isEnabled, forKey: .isEnabled)
+        try values.encode(inputMode, forKey: .inputMode)
+        try values.encode(borderVisibility, forKey: .borderVisibility)
+        try values.encode(showsTouchIndicator, forKey: .showsTouchIndicator)
+        try values.encode(prefersAnchorLocked, forKey: .prefersAnchorLocked)
+    }
 }
 
 public struct GlidexAppSnapshot: Equatable, Sendable {
@@ -101,19 +138,26 @@ public struct GlidexAppSnapshot: Equatable, Sendable {
     public var target: SimulatorTarget?
     public var isCalibrationMode: Bool
     public var optionAnchorAvailability: OptionAnchorAvailability
+    public var anchorLockState: AnchorLockState
 
     public init(
         preferences: GlidexPreferenceValues = .defaults,
         status: GlidexRuntimeStatus = .waiting("Looking for Simulator"),
         target: SimulatorTarget? = nil,
         isCalibrationMode: Bool = false,
-        optionAnchorAvailability: OptionAnchorAvailability = .inactive
+        optionAnchorAvailability: OptionAnchorAvailability = .inactive,
+        anchorLockState: AnchorLockState? = nil
     ) {
         self.preferences = preferences
         self.status = preferences.isEnabled ? status : .paused
         self.target = target
         self.isCalibrationMode = isCalibrationMode
         self.optionAnchorAvailability = optionAnchorAvailability
+        self.anchorLockState = anchorLockState ?? (
+            preferences.inputMode == .navigate
+                ? .unavailable
+                : (preferences.prefersAnchorLocked ? .locked : .unlocked)
+        )
     }
 
     public var acceptsInput: Bool {
@@ -168,6 +212,24 @@ public final class GlidexAppState {
     public func setInputMode(_ mode: CaptureInputMode) {
         var next = snapshot
         next.preferences.inputMode = mode == .disabled ? .navigate : mode
+        next.anchorLockState = next.preferences.inputMode == .navigate
+            ? .unavailable
+            : (next.preferences.prefersAnchorLocked ? .locked : .unlocked)
+        commit(next)
+    }
+
+    public func setAnchorLocked(_ locked: Bool) {
+        guard snapshot.preferences.inputMode == .point || snapshot.preferences.inputMode == .edge else { return }
+        var next = snapshot
+        next.preferences.prefersAnchorLocked = locked
+        next.anchorLockState = locked ? .locked : .unlocked
+        commit(next)
+    }
+
+    public func resetAnchorLockForAttachment() {
+        guard snapshot.preferences.inputMode == .point || snapshot.preferences.inputMode == .edge else { return }
+        var next = snapshot
+        next.anchorLockState = .unlocked
         commit(next)
     }
 

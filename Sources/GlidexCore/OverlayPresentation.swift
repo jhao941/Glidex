@@ -10,6 +10,7 @@ public struct OverlayPresentation: Equatable, Sendable {
     public var showsTouchIndicator: Bool
     public var isCalibrationMode: Bool
     public var optionAnchorAvailability: OptionAnchorAvailability
+    public var anchorLockState: AnchorLockState
 
     public init(snapshot: GlidexAppSnapshot) {
         self.status = snapshot.status
@@ -19,6 +20,7 @@ public struct OverlayPresentation: Equatable, Sendable {
         self.showsTouchIndicator = snapshot.preferences.showsTouchIndicator
         self.isCalibrationMode = snapshot.isCalibrationMode
         self.optionAnchorAvailability = snapshot.optionAnchorAvailability
+        self.anchorLockState = snapshot.anchorLockState
     }
 
     public static func requiresCancellation(

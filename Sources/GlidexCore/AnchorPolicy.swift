@@ -10,7 +10,7 @@ public enum SimulatorEdge: Equatable, Sendable {
 public enum AnchorPolicy: Equatable, Sendable {
     case navigate
     case point(SimulatorPoint?)
-    case edge(SimulatorEdge)
+    case edge(SimulatorEdge, fixedPoint: SimulatorPoint?)
 
     public func resolve(
         fallback: SimulatorPoint,
@@ -22,18 +22,32 @@ public enum AnchorPolicy: Equatable, Sendable {
             return fallback
         case let .point(point):
             return point ?? fallback
-        case let .edge(edge):
+        case let .edge(edge, fixedPoint):
+            let point = fixedPoint ?? fallback
             switch edge {
             case .leading:
-                return SimulatorPoint(x: edgeInset, y: fallback.y)
+                return clamped(SimulatorPoint(x: edgeInset, y: point.y), simulatorSize: simulatorSize)
             case .trailing:
-                return SimulatorPoint(x: max(0, simulatorSize.width - edgeInset), y: fallback.y)
+                return clamped(SimulatorPoint(x: simulatorSize.width - edgeInset, y: point.y), simulatorSize: simulatorSize)
             case .top:
-                return SimulatorPoint(x: fallback.x, y: edgeInset)
+                return clamped(SimulatorPoint(x: point.x, y: edgeInset), simulatorSize: simulatorSize)
             case .bottom:
-                return SimulatorPoint(x: fallback.x, y: max(0, simulatorSize.height - edgeInset))
+                return clamped(SimulatorPoint(x: point.x, y: simulatorSize.height - edgeInset), simulatorSize: simulatorSize)
             }
         }
+    }
+
+    private func clamped(_ point: SimulatorPoint, simulatorSize: SimulatorPointSize) -> SimulatorPoint {
+        SimulatorPoint(
+            x: min(max(point.x, 0), simulatorSize.width),
+            y: min(max(point.y, 0), simulatorSize.height)
+        )
+    }
+}
+
+public extension AnchorPolicy {
+    static func edge(_ edge: SimulatorEdge) -> AnchorPolicy {
+        .edge(edge, fixedPoint: nil)
     }
 }
 
