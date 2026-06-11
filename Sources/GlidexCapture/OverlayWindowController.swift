@@ -13,7 +13,6 @@ final class OverlayWindowController {
     private let captureView: CaptureView
     private var stateObserver: UUID?
     private var calibrationDrag: CalibrationDrag?
-    private var virtualFinger: CapturePoint?
     private var acceptedInput = false
 
     var onInputDeactivated: (() -> Void)?
@@ -48,11 +47,6 @@ final class OverlayWindowController {
 
     func hide() {
         window.orderOut(nil)
-    }
-
-    func updateVirtualFinger(_ point: CapturePoint?) {
-        virtualFinger = point
-        captureView.render(snapshot: state.snapshot, virtualFinger: virtualFinger)
     }
 
     func capturePoint(fromDesktop point: DesktopPoint) -> CapturePoint? {
@@ -122,7 +116,7 @@ final class OverlayWindowController {
         acceptedInput = presentation.acceptsInput
         window.ignoresMouseEvents = !presentation.acceptsInput
         window.alphaValue = OverlayPresentation.windowAlpha
-        captureView.render(snapshot: snapshot, virtualFinger: virtualFinger)
+        captureView.render(snapshot: snapshot)
     }
 
     private func beginCalibration(at point: CapturePoint) {

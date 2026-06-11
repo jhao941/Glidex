@@ -9,7 +9,6 @@ final class CaptureView: NSView {
     var onMouseMoved: ((CapturePoint) -> Void)?
 
     private var presentation = OverlayPresentation(snapshot: GlidexAppSnapshot())
-    private var virtualFinger: CapturePoint?
     private var mouseTrackingArea: NSTrackingArea?
 
     override init(frame frameRect: NSRect) {
@@ -46,16 +45,16 @@ final class CaptureView: NSView {
         super.updateTrackingAreas()
     }
 
-    func render(snapshot: GlidexAppSnapshot, virtualFinger: CapturePoint?) {
+    func render(snapshot: GlidexAppSnapshot) {
         presentation = OverlayPresentation(snapshot: snapshot)
-        self.virtualFinger = virtualFinger
         needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         drawBorder()
-        drawVirtualFinger()
+        drawAnchorIndicator()
+        drawActiveTouches()
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -100,10 +99,12 @@ final class CaptureView: NSView {
         border.stroke()
     }
 
-    private func drawVirtualFinger() {
-        guard presentation.showsTouchIndicator,
-              presentation.inputMode == .point || presentation.inputMode == .edge || presentation.optionAnchorAvailability.isAvailable,
-              let point = virtualFinger?.cgPoint else { return }
+    private func drawAnchorIndicator() {
+        let requiredForEditing = presentation.anchorLockState == .unlocked &&
+            (presentation.inputMode == .point || presentation.inputMode == .edge)
+        guard presentation.showsAnchorIndicator || requiredForEditing,
+              let simulatorPoint = presentation.anchorIndicator.point,
+              let point = capturePoint(from: simulatorPoint) else { return }
         let ring = CGRect(x: point.x - 11, y: point.y - 11, width: 22, height: 22)
         NSColor.systemOrange.withAlphaComponent(0.25).setFill()
         NSBezierPath(ovalIn: ring).fill()
@@ -111,6 +112,28 @@ final class CaptureView: NSView {
         let path = NSBezierPath(ovalIn: ring)
         path.lineWidth = 2
         path.stroke()
+    }
+
+    private func drawActiveTouches() {
+        guard presentation.showsActiveTouches else { return }
+        for contact in presentation.activeTouches {
+            guard let point = capturePoint(from: contact.point) else { continue }
+            let dot = CGRect(x: point.x - 8, y: point.y - 8, width: 16, height: 16)
+            NSColor.controlAccentColor.withAlphaComponent(0.42).setFill()
+            NSBezierPath(ovalIn: dot).fill()
+            NSColor.white.withAlphaComponent(0.9).setStroke()
+            let outline = NSBezierPath(ovalIn: dot)
+            outline.lineWidth = 1.5
+            outline.stroke()
+        }
+    }
+
+    private func capturePoint(from point: SimulatorPoint) -> CGPoint? {
+        guard let size = presentation.simulatorSize, size.width > 0, size.height > 0 else { return nil }
+        return CGPoint(
+            x: point.x / size.width * bounds.width,
+            y: bounds.height - point.y / size.height * bounds.height
+        )
     }
 
     private var borderColor: NSColor {
@@ -133,5 +156,14 @@ final class CaptureView: NSView {
 private extension OptionAnchorAvailability {
     var isAvailable: Bool {
         if case .available = self { true } else { false }
+    }
+}
+
+private extension AnchorIndicatorState {
+    var point: SimulatorPoint? {
+        switch self {
+        case .none: nil
+        case let .fixed(point), let .temporary(point): point
+        }
     }
 }

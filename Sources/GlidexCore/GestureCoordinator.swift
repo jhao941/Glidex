@@ -39,7 +39,10 @@ public final class GestureCoordinator {
                 x: mapper.simulatorSize.width / 2,
                 y: mapper.simulatorSize.height / 2
             )
+        } else if let virtualFingerPoint {
+            self.virtualFingerPoint = mapper.clamped(virtualFingerPoint)
         }
+        onStateChange?()
     }
 
     public func setRawGestureInputProvider(_ provider: @escaping () -> GestureInputSample) {
@@ -124,7 +127,10 @@ public final class GestureCoordinator {
 
     public func prepareForDeviceChange() {
         cancelAll(reason: "simulator device changing")
+        virtualFingerPoint = nil
+        lastMousePoint = nil
         (sink as? DeviceAwareTouchSink)?.prepareForDeviceChange()
+        onStateChange?()
     }
 
     private func beginRawGesture(_ gesture: InterpretedGesture) {

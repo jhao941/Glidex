@@ -57,8 +57,11 @@ final class AppController: NSObject, NSApplicationDelegate {
         statusItemController.onSetBorderVisibility = { [weak state] visibility in
             state?.setBorderVisibility(visibility)
         }
-        statusItemController.onSetShowsTouchIndicator = { [weak state] shows in
-            state?.setShowsTouchIndicator(shows)
+        statusItemController.onSetShowsAnchorIndicator = { [weak state] shows in
+            state?.setShowsAnchorIndicator(shows)
+        }
+        statusItemController.onSetShowsActiveTouches = { [weak state] shows in
+            state?.setShowsActiveTouches(shows)
         }
         statusItemController.onSetAnchorLocked = { [weak state] locked in
             state?.setAnchorLocked(locked)

@@ -80,25 +80,51 @@ public enum AnchorLockState: String, Equatable, Sendable {
     case locked
 }
 
+public enum AnchorIndicatorState: Equatable, Sendable {
+    case none
+    case fixed(SimulatorPoint)
+    case temporary(SimulatorPoint)
+}
+
 public struct GlidexPreferenceValues: Codable, Equatable, Sendable {
     public var isEnabled: Bool
     public var inputMode: CaptureInputMode
     public var borderVisibility: BorderVisibility
-    public var showsTouchIndicator: Bool
+    public var showsAnchorIndicator: Bool
+    public var showsActiveTouches: Bool
     public var prefersAnchorLocked: Bool
 
     public init(
         isEnabled: Bool = true,
         inputMode: CaptureInputMode = .navigate,
         borderVisibility: BorderVisibility = .subtle,
-        showsTouchIndicator: Bool = true,
+        showsAnchorIndicator: Bool = true,
+        showsActiveTouches: Bool = true,
         prefersAnchorLocked: Bool = false
     ) {
         self.isEnabled = isEnabled
         self.inputMode = inputMode == .disabled ? .navigate : inputMode
         self.borderVisibility = borderVisibility
-        self.showsTouchIndicator = showsTouchIndicator
+        self.showsAnchorIndicator = showsAnchorIndicator
+        self.showsActiveTouches = showsActiveTouches
         self.prefersAnchorLocked = prefersAnchorLocked
+    }
+
+    public init(
+        isEnabled: Bool = true,
+        inputMode: CaptureInputMode = .navigate,
+        borderVisibility: BorderVisibility = .subtle,
+        showsTouchIndicator: Bool,
+        prefersAnchorLocked: Bool = false
+    ) {
+        self.init(
+            isEnabled: isEnabled,
+            inputMode: inputMode,
+            borderVisibility: borderVisibility,
+            showsAnchorIndicator: showsTouchIndicator,
+            showsActiveTouches: showsTouchIndicator,
+            prefersAnchorLocked: prefersAnchorLocked
+        )
     }
 
     public static let defaults = GlidexPreferenceValues()
@@ -108,16 +134,20 @@ public struct GlidexPreferenceValues: Codable, Equatable, Sendable {
         case inputMode
         case borderVisibility
         case showsTouchIndicator
+        case showsAnchorIndicator
+        case showsActiveTouches
         case prefersAnchorLocked
     }
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        let legacyIndicator = try values.decodeIfPresent(Bool.self, forKey: .showsTouchIndicator)
         self.init(
             isEnabled: try values.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true,
             inputMode: try values.decodeIfPresent(CaptureInputMode.self, forKey: .inputMode) ?? .navigate,
             borderVisibility: try values.decodeIfPresent(BorderVisibility.self, forKey: .borderVisibility) ?? .subtle,
-            showsTouchIndicator: try values.decodeIfPresent(Bool.self, forKey: .showsTouchIndicator) ?? true,
+            showsAnchorIndicator: try values.decodeIfPresent(Bool.self, forKey: .showsAnchorIndicator) ?? legacyIndicator ?? true,
+            showsActiveTouches: try values.decodeIfPresent(Bool.self, forKey: .showsActiveTouches) ?? legacyIndicator ?? true,
             prefersAnchorLocked: try values.decodeIfPresent(Bool.self, forKey: .prefersAnchorLocked) ?? false
         )
     }
@@ -127,8 +157,17 @@ public struct GlidexPreferenceValues: Codable, Equatable, Sendable {
         try values.encode(isEnabled, forKey: .isEnabled)
         try values.encode(inputMode, forKey: .inputMode)
         try values.encode(borderVisibility, forKey: .borderVisibility)
-        try values.encode(showsTouchIndicator, forKey: .showsTouchIndicator)
+        try values.encode(showsAnchorIndicator, forKey: .showsAnchorIndicator)
+        try values.encode(showsActiveTouches, forKey: .showsActiveTouches)
         try values.encode(prefersAnchorLocked, forKey: .prefersAnchorLocked)
+    }
+
+    public var showsTouchIndicator: Bool {
+        get { showsAnchorIndicator && showsActiveTouches }
+        set {
+            showsAnchorIndicator = newValue
+            showsActiveTouches = newValue
+        }
     }
 }
 
@@ -139,6 +178,8 @@ public struct GlidexAppSnapshot: Equatable, Sendable {
     public var isCalibrationMode: Bool
     public var optionAnchorAvailability: OptionAnchorAvailability
     public var anchorLockState: AnchorLockState
+    public var anchorIndicator: AnchorIndicatorState
+    public var activeTouches: [TouchContactPoint]
 
     public init(
         preferences: GlidexPreferenceValues = .defaults,
@@ -146,7 +187,9 @@ public struct GlidexAppSnapshot: Equatable, Sendable {
         target: SimulatorTarget? = nil,
         isCalibrationMode: Bool = false,
         optionAnchorAvailability: OptionAnchorAvailability = .inactive,
-        anchorLockState: AnchorLockState? = nil
+        anchorLockState: AnchorLockState? = nil,
+        anchorIndicator: AnchorIndicatorState = .none,
+        activeTouches: [TouchContactPoint] = []
     ) {
         self.preferences = preferences
         self.status = preferences.isEnabled ? status : .paused
@@ -158,6 +201,8 @@ public struct GlidexAppSnapshot: Equatable, Sendable {
                 ? .unavailable
                 : (preferences.prefersAnchorLocked ? .locked : .unlocked)
         )
+        self.anchorIndicator = anchorIndicator
+        self.activeTouches = activeTouches
     }
 
     public var acceptsInput: Bool {
@@ -239,9 +284,35 @@ public final class GlidexAppState {
         commit(next)
     }
 
-    public func setShowsTouchIndicator(_ shows: Bool) {
+    public func setShowsAnchorIndicator(_ shows: Bool) {
         var next = snapshot
-        next.preferences.showsTouchIndicator = shows
+        next.preferences.showsAnchorIndicator = shows
+        commit(next)
+    }
+
+    public func setShowsActiveTouches(_ shows: Bool) {
+        var next = snapshot
+        next.preferences.showsActiveTouches = shows
+        if !shows { next.activeTouches = [] }
+        commit(next)
+    }
+
+    public func setAnchorIndicator(_ indicator: AnchorIndicatorState) {
+        var next = snapshot
+        next.anchorIndicator = indicator
+        commit(next)
+    }
+
+    public func setActiveTouches(_ contacts: [TouchContactPoint]) {
+        var next = snapshot
+        next.activeTouches = contacts
+        commit(next)
+    }
+
+    public func clearIndicators() {
+        var next = snapshot
+        next.anchorIndicator = .none
+        next.activeTouches = []
         commit(next)
     }
 

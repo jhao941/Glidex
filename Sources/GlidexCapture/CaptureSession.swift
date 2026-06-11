@@ -11,6 +11,7 @@ final class CaptureSession {
     private let overlay: OverlayWindowController
     private let injector: SimulatorInjector
     private let sink: IndigoTouchSink
+    private let observingSink: TouchObservingSink
     private let coordinator: GestureCoordinator
     private let windowTracker: SimulatorWindowTracker
 
@@ -40,13 +41,19 @@ final class CaptureSession {
         self.state = state
         self.overlay = overlay
         self.injector = try SimulatorInjector(logger: logger)
-        self.sink = IndigoTouchSink(injector: injector, logger: logger)
+        let sink = IndigoTouchSink(injector: injector, logger: logger)
+        self.sink = sink
+        self.observingSink = TouchObservingSink(downstream: sink) { event in
+            Task { @MainActor in
+                state.setActiveTouches(ActiveTouchIndicatorLifecycle.contacts(for: event))
+            }
+        }
         self.coordinator = GestureCoordinator(
             mapper: CoordinateMapper(
                 captureRect: .zero,
                 simulatorSize: Self.fallbackSimulatorSize
             ),
-            sink: sink,
+            sink: observingSink,
             logger: logger
         )
         self.windowTracker = SimulatorWindowTracker(logger: logger)
@@ -109,11 +116,7 @@ final class CaptureSession {
             self?.finishCalibration(frame: frame)
         }
         coordinator.onStateChange = { [weak self] in
-            guard let self else { return }
-            if case .available = state.snapshot.optionAnchorAvailability {
-                return
-            }
-            overlay.updateVirtualFinger(coordinator.capturePointForVirtualFinger())
+            self?.refreshAnchorIndicator()
         }
         sink.onError = { [weak self] message in
             Task { @MainActor [weak self] in
@@ -128,6 +131,7 @@ final class CaptureSession {
     private func apply(_ snapshot: GlidexAppSnapshot) {
         coordinator.setMode(snapshot.preferences.inputMode)
         coordinator.setAnchorLocked(snapshot.anchorLockState == .locked)
+        refreshAnchorIndicator()
         refreshOptionPreview()
 
         let becameEnabled = snapshot.preferences.isEnabled && !lastEnabled
@@ -332,6 +336,8 @@ final class CaptureSession {
         lastSimulatorPID = tracked.ownerPID
         overlay.show(frame: geometry.desktopFrame)
         coordinator.updateMapper(geometry.mapper)
+        state.setActiveTouches([])
+        refreshAnchorIndicator()
         if activate {
             state.transition(to: .active, target: orientedTarget)
         }
@@ -349,6 +355,8 @@ final class CaptureSession {
         )
         selectedTarget = nativeTarget.withPointSize(geometry.simulatorSize)
         coordinator.updateMapper(geometry.mapper)
+        state.setActiveTouches([])
+        refreshAnchorIndicator()
         state.transition(to: .active, target: selectedTarget)
     }
 
@@ -386,7 +394,7 @@ final class CaptureSession {
     private func stopActiveInput(reason: String) {
         coordinator.cancelAll(reason: reason)
         state.setOptionAnchorAvailability(.inactive)
-        overlay.updateVirtualFinger(coordinator.capturePointForVirtualFinger())
+        state.clearIndicators()
         rawTouchStream?.stop()
         rawTouchStream = nil
         rawStreamGeneration += 1
@@ -433,7 +441,7 @@ final class CaptureSession {
     private func refreshOptionPreview() {
         guard state.snapshot.preferences.inputMode == .navigate, canInjectInput else {
             state.setOptionAnchorAvailability(.inactive)
-            overlay.updateVirtualFinger(coordinator.capturePointForVirtualFinger())
+            refreshAnchorIndicator()
             return
         }
         let desktopPoint = DesktopPoint(NSEvent.mouseLocation)
@@ -446,17 +454,30 @@ final class CaptureSession {
     private func updateOptionPreview(optionPressed: Bool, capturePoint: CapturePoint?) {
         guard state.snapshot.preferences.inputMode == .navigate, optionPressed else {
             state.setOptionAnchorAvailability(.inactive)
-            overlay.updateVirtualFinger(coordinator.capturePointForVirtualFinger())
+            refreshAnchorIndicator()
             return
         }
         guard let capturePoint,
               let simulatorPoint = coordinator.simulatorPoint(fromCapture: capturePoint) else {
             state.setOptionAnchorAvailability(.outsideSimulator)
-            overlay.updateVirtualFinger(nil)
+            state.setAnchorIndicator(.none)
             return
         }
         state.setOptionAnchorAvailability(.available(simulatorPoint))
-        overlay.updateVirtualFinger(capturePoint)
+        state.setAnchorIndicator(.temporary(simulatorPoint))
+    }
+
+    private func refreshAnchorIndicator() {
+        if case let .available(point) = state.snapshot.optionAnchorAvailability {
+            state.setAnchorIndicator(.temporary(point))
+            return
+        }
+        let mode = state.snapshot.preferences.inputMode
+        if (mode == .point || mode == .edge), let point = coordinator.virtualFingerPoint {
+            state.setAnchorIndicator(.fixed(point))
+        } else {
+            state.setAnchorIndicator(.none)
+        }
     }
 
     private func installModifierMonitors() {

@@ -6,7 +6,8 @@ final class StatusItemController: NSObject {
     var onSetEnabled: ((Bool) -> Void)?
     var onSetMode: ((CaptureInputMode) -> Void)?
     var onSetBorderVisibility: ((BorderVisibility) -> Void)?
-    var onSetShowsTouchIndicator: ((Bool) -> Void)?
+    var onSetShowsAnchorIndicator: ((Bool) -> Void)?
+    var onSetShowsActiveTouches: ((Bool) -> Void)?
     var onSetAnchorLocked: ((Bool) -> Void)?
     var onSetCalibrationMode: ((Bool) -> Void)?
     var onReattach: (() -> Void)?
@@ -74,9 +75,14 @@ final class StatusItemController: NSObject {
             selector: #selector(selectBorderVisibility(_:))
         ))
         menu.addItem(actionItem(
-            "Show Touch Indicator",
-            action: #selector(toggleTouchIndicator(_:)),
-            state: snapshot.preferences.showsTouchIndicator
+            "Show Anchor Indicator",
+            action: #selector(toggleAnchorIndicator(_:)),
+            state: snapshot.preferences.showsAnchorIndicator
+        ))
+        menu.addItem(actionItem(
+            "Show Active Touches",
+            action: #selector(toggleActiveTouches(_:)),
+            state: snapshot.preferences.showsActiveTouches
         ))
         menu.addItem(.separator())
         menu.addItem(actionItem("Reattach to Simulator", action: #selector(reattach(_:))))
@@ -169,8 +175,12 @@ final class StatusItemController: NSObject {
         onSetBorderVisibility?(visibility)
     }
 
-    @objc private func toggleTouchIndicator(_ sender: NSMenuItem) {
-        onSetShowsTouchIndicator?(sender.state != .on)
+    @objc private func toggleAnchorIndicator(_ sender: NSMenuItem) {
+        onSetShowsAnchorIndicator?(sender.state != .on)
+    }
+
+    @objc private func toggleActiveTouches(_ sender: NSMenuItem) {
+        onSetShowsActiveTouches?(sender.state != .on)
     }
 
     @objc private func toggleAnchorLock(_ sender: NSMenuItem) {
