@@ -10,6 +10,7 @@ final class CaptureView: NSView {
 
     private var presentation = OverlayPresentation(snapshot: GlidexAppSnapshot())
     private var mouseTrackingArea: NSTrackingArea?
+    private var mouseInputGate = MouseInputGate()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -58,19 +59,26 @@ final class CaptureView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        guard shouldHandleMouseEvent(event, phase: .down) else { return }
         onMouseDown?(CapturePoint(convert(event.locationInWindow, from: nil)))
     }
 
     override func mouseDragged(with event: NSEvent) {
+        guard shouldHandleMouseEvent(event, phase: .dragged) else { return }
         onMouseDragged?(CapturePoint(convert(event.locationInWindow, from: nil)))
     }
 
     override func mouseUp(with event: NSEvent) {
+        guard shouldHandleMouseEvent(event, phase: .up) else { return }
         onMouseUp?(CapturePoint(convert(event.locationInWindow, from: nil)))
     }
 
     override func mouseMoved(with event: NSEvent) {
         onMouseMoved?(CapturePoint(convert(event.locationInWindow, from: nil)))
+    }
+
+    private func shouldHandleMouseEvent(_ event: NSEvent, phase: MouseInputPhase) -> Bool {
+        mouseInputGate.shouldHandle(phase, isTouchDerived: event.subtype == .touch)
     }
 
     private func drawBorder() {
