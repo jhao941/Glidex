@@ -37,6 +37,8 @@ public struct GestureInterpreter: Sendable {
     private struct State: Sendable {
         var contactIDs: (Int32, Int32)
         var initialTimestamp: Double
+        var initialFirstPosition: NormalizedTouchPoint
+        var initialSecondPosition: NormalizedTouchPoint
         var initialCentroid: NormalizedTouchPoint
         var initialDistance: CGFloat
         var intent: GestureIntent?
@@ -77,6 +79,8 @@ public struct GestureInterpreter: Sendable {
             state = State(
                 contactIDs: contactIDs,
                 initialTimestamp: frame.timestamp,
+                initialFirstPosition: first.normalizedPosition,
+                initialSecondPosition: second.normalizedPosition,
                 initialCentroid: centroid,
                 initialDistance: distance,
                 intent: nil
@@ -88,8 +92,9 @@ public struct GestureInterpreter: Sendable {
         if current.intent == nil {
             current.intent = resolveIntent(
                 state: current,
+                firstPosition: first.normalizedPosition,
+                secondPosition: second.normalizedPosition,
                 centroid: centroid,
-                distance: distance,
                 timestamp: frame.timestamp
             )
             state = current
@@ -123,21 +128,33 @@ public struct GestureInterpreter: Sendable {
 
     private func resolveIntent(
         state: State,
+        firstPosition: NormalizedTouchPoint,
+        secondPosition: NormalizedTouchPoint,
         centroid: NormalizedTouchPoint,
-        distance: CGFloat,
         timestamp: Double
     ) -> GestureIntent? {
         let elapsed = timestamp - state.initialTimestamp
         let centroidDelta = state.initialCentroid.distance(to: centroid)
-        let distanceDelta = abs(distance - state.initialDistance)
+        let firstMovement = firstPosition - state.initialFirstPosition
+        let secondMovement = secondPosition - state.initialSecondPosition
+        let relativeMovement = secondMovement - firstMovement
+        let initialAxis = (state.initialSecondPosition - state.initialFirstPosition).normalized
+        let firstAxialMovement = firstMovement.dot(initialAxis)
+        let secondAxialMovement = secondMovement.dot(initialAxis)
+        let axialSeparation = abs(relativeMovement.dot(initialAxis))
+        let fingersMoveOppositelyAlongAxis = firstAxialMovement * secondAxialMovement < 0
+            && min(abs(firstAxialMovement), abs(secondAxialMovement)) >= tuning.pinchMinimumFingerMovement
+        let bothFingersMoved = min(firstMovement.magnitude, secondMovement.magnitude) >=
+            tuning.pinchMinimumFingerMovement
 
-        if distanceDelta >= tuning.pinchIntentThreshold && distanceDelta > centroidDelta * 1.15 {
+        if axialSeparation >= tuning.pinchIntentThreshold,
+           axialSeparation > centroidDelta * tuning.pinchDominanceRatio,
+           fingersMoveOppositelyAlongAxis {
             return .pinch
         }
-        if distanceDelta >= tuning.pinchFallbackThreshold {
-            return .pinch
-        }
-        if centroidDelta >= tuning.navigationIntentThreshold && distanceDelta < centroidDelta * 1.2 {
+        if centroidDelta >= tuning.navigationIntentThreshold,
+           !fingersMoveOppositelyAlongAxis,
+           bothFingersMoved {
             return .navigate
         }
         if elapsed >= tuning.navigationFallbackDelay && centroidDelta >= tuning.navigationFallbackThreshold {
@@ -157,5 +174,29 @@ public struct GestureInterpreter: Sendable {
 private extension NormalizedTouchPoint {
     func distance(to other: NormalizedTouchPoint) -> CGFloat {
         hypot(x - other.x, y - other.y)
+    }
+
+    static func - (lhs: NormalizedTouchPoint, rhs: NormalizedTouchPoint) -> NormalizedTouchVector {
+        NormalizedTouchVector(x: lhs.x - rhs.x, y: lhs.y - rhs.y)
+    }
+}
+
+private extension NormalizedTouchVector {
+    static func - (lhs: NormalizedTouchVector, rhs: NormalizedTouchVector) -> NormalizedTouchVector {
+        NormalizedTouchVector(x: lhs.x - rhs.x, y: lhs.y - rhs.y)
+    }
+
+    var magnitude: CGFloat {
+        hypot(x, y)
+    }
+
+    var normalized: NormalizedTouchVector {
+        let length = magnitude
+        guard length > 0 else { return .zero }
+        return NormalizedTouchVector(x: x / length, y: y / length)
+    }
+
+    func dot(_ other: NormalizedTouchVector) -> CGFloat {
+        x * other.x + y * other.y
     }
 }

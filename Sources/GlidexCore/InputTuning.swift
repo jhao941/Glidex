@@ -5,7 +5,8 @@ public struct InputTuning: Equatable, Sendable {
     public var mouseDragThreshold: CGFloat
     public var navigationGain: CGFloat
     public var pinchIntentThreshold: CGFloat
-    public var pinchFallbackThreshold: CGFloat
+    public var pinchMinimumFingerMovement: CGFloat
+    public var pinchDominanceRatio: CGFloat
     public var navigationIntentThreshold: CGFloat
     public var navigationFallbackThreshold: CGFloat
     public var navigationFallbackDelay: TimeInterval
@@ -14,7 +15,8 @@ public struct InputTuning: Equatable, Sendable {
         mouseDragThreshold: CGFloat = 3,
         navigationGain: CGFloat = 1.35,
         pinchIntentThreshold: CGFloat = 0.010,
-        pinchFallbackThreshold: CGFloat = 0.018,
+        pinchMinimumFingerMovement: CGFloat = 0.008,
+        pinchDominanceRatio: CGFloat = 1.15,
         navigationIntentThreshold: CGFloat = 0.010,
         navigationFallbackThreshold: CGFloat = 0.006,
         navigationFallbackDelay: TimeInterval = 0.070
@@ -22,7 +24,8 @@ public struct InputTuning: Equatable, Sendable {
         self.mouseDragThreshold = mouseDragThreshold
         self.navigationGain = navigationGain
         self.pinchIntentThreshold = pinchIntentThreshold
-        self.pinchFallbackThreshold = pinchFallbackThreshold
+        self.pinchMinimumFingerMovement = pinchMinimumFingerMovement
+        self.pinchDominanceRatio = pinchDominanceRatio
         self.navigationIntentThreshold = navigationIntentThreshold
         self.navigationFallbackThreshold = navigationFallbackThreshold
         self.navigationFallbackDelay = navigationFallbackDelay
