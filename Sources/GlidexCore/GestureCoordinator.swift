@@ -28,6 +28,7 @@ public final class GestureCoordinator {
     private var lastMousePoint: SimulatorPoint?
     private var pinchInitialRadius: CGFloat = 72
     private var pinchCurrentRadius: CGFloat = 72
+    private var pinchCurrentAngle: CGFloat = 0
     private var rawGestureDiagnostics: RawGestureDiagnostics?
     private var inputOwner: InputOwner?
 
@@ -215,6 +216,7 @@ public final class GestureCoordinator {
         case .pinch:
             pinchInitialRadius = initialPinchRadius(anchor: anchor)
             pinchCurrentRadius = pinchInitialRadius
+            pinchCurrentAngle = 0
             transaction.begin(contacts: pinchContacts(for: gesture, anchor: anchor))
         default:
             break
@@ -336,11 +338,22 @@ public final class GestureCoordinator {
         let filteredTarget = pinchCurrentRadius * 0.82 + targetRadius * 0.18
         let step = min(max(filteredTarget - pinchCurrentRadius, -2.5), 2.5)
         pinchCurrentRadius = clampedPinchRadius(pinchCurrentRadius + step)
+        let targetAngle = -gesture.rotationDelta
+        let angleDifference = normalizedAngle(targetAngle - pinchCurrentAngle)
+        let angleStep = min(max(angleDifference * 0.35, -0.10), 0.10)
+        pinchCurrentAngle = normalizedAngle(pinchCurrentAngle + angleStep)
+
+        let xOffset = cos(pinchCurrentAngle) * pinchCurrentRadius
+        let yOffset = sin(pinchCurrentAngle) * pinchCurrentRadius
 
         return [
-            TouchContactPoint(identifier: 0, point: mapper.clamped(SimulatorPoint(x: anchor.x - pinchCurrentRadius, y: anchor.y))),
-            TouchContactPoint(identifier: 1, point: mapper.clamped(SimulatorPoint(x: anchor.x + pinchCurrentRadius, y: anchor.y))),
+            TouchContactPoint(identifier: 0, point: mapper.clamped(SimulatorPoint(x: anchor.x - xOffset, y: anchor.y - yOffset))),
+            TouchContactPoint(identifier: 1, point: mapper.clamped(SimulatorPoint(x: anchor.x + xOffset, y: anchor.y + yOffset))),
         ]
+    }
+
+    private func normalizedAngle(_ angle: CGFloat) -> CGFloat {
+        atan2(sin(angle), cos(angle))
     }
 
     private func clampedPinchRadius(_ radius: CGFloat) -> CGFloat {

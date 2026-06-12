@@ -8,6 +8,7 @@ public struct InterpretedGesture: Equatable, Sendable {
     public let centroid: NormalizedTouchPoint
     public let initialDistance: CGFloat
     public let distance: CGFloat
+    public let rotationDelta: CGFloat
 
     public init(
         contactIDs: [Int32],
@@ -15,7 +16,8 @@ public struct InterpretedGesture: Equatable, Sendable {
         initialCentroid: NormalizedTouchPoint,
         centroid: NormalizedTouchPoint,
         initialDistance: CGFloat,
-        distance: CGFloat
+        distance: CGFloat,
+        rotationDelta: CGFloat
     ) {
         self.contactIDs = contactIDs
         self.intent = intent
@@ -23,6 +25,7 @@ public struct InterpretedGesture: Equatable, Sendable {
         self.centroid = centroid
         self.initialDistance = initialDistance
         self.distance = distance
+        self.rotationDelta = rotationDelta
     }
 }
 
@@ -107,7 +110,11 @@ public struct GestureInterpreter: Sendable {
             initialCentroid: current.initialCentroid,
             centroid: centroid,
             initialDistance: current.initialDistance,
-            distance: distance
+            distance: distance,
+            rotationDelta: Self.normalizedAngle(
+                Self.angle(from: first.normalizedPosition, to: second.normalizedPosition) -
+                    Self.angle(from: current.initialFirstPosition, to: current.initialSecondPosition)
+            )
         )
         return isBeginning ? .began(gesture) : .changed(gesture)
     }
@@ -168,6 +175,14 @@ public struct GestureInterpreter: Sendable {
             x: (first.x + second.x) / 2,
             y: (first.y + second.y) / 2
         )
+    }
+
+    private static func angle(from first: NormalizedTouchPoint, to second: NormalizedTouchPoint) -> CGFloat {
+        atan2(second.y - first.y, second.x - first.x)
+    }
+
+    private static func normalizedAngle(_ angle: CGFloat) -> CGFloat {
+        atan2(sin(angle), cos(angle))
     }
 }
 

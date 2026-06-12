@@ -33,6 +33,29 @@ struct GestureReplayTests {
         #expect(events.first?.snapshot?.anchor == SimulatorPoint(x: 201, y: 437))
     }
 
+    @Test("confirmed pinch maps trackpad rotation into the injected contact axis")
+    func pinchRotation() {
+        let sink = ReplayRecordingSink()
+        let coordinator = makeCoordinator(sink: sink)
+        let frames = [
+            rawFrame(1, 0, point(0.4, 0.5), point(0.6, 0.5)),
+            rawFrame(2, 0.02, point(0.38, 0.5), point(0.62, 0.5)),
+            rawFrame(3, 0.04, point(0.4, 0.4), point(0.6, 0.6)),
+            rawFrame(4, 0.06, point(0.4, 0.4), point(0.6, 0.6)),
+        ]
+
+        frames.forEach(coordinator.handleRawFrame)
+        guard let contacts = sink.events.last?.snapshot?.contacts else {
+            Issue.record("missing rotated pinch contacts")
+            return
+        }
+
+        #expect(contacts.count == 2)
+        #expect(contacts[0].point.y > contacts[1].point.y)
+        #expect(abs((contacts[0].point.x + contacts[1].point.x) / 2 - 201) < 0.001)
+        #expect(abs((contacts[0].point.y + contacts[1].point.y) / 2 - 437) < 0.001)
+    }
+
     @Test("edge mode is explicit and isolated")
     func edge() throws {
         let events = try replay("edge-leading")
@@ -181,6 +204,26 @@ struct GestureReplayTests {
             sink: sink,
             logger: Logger()
         )
+    }
+
+    private func rawFrame(
+        _ number: Int32,
+        _ timestamp: Double,
+        _ first: NormalizedTouchPoint,
+        _ second: NormalizedTouchPoint
+    ) -> RawTouchFrame {
+        RawTouchFrame(
+            timestamp: timestamp,
+            frame: number,
+            contacts: [
+                RawTouchContact(identifier: 1, state: 4, normalizedPosition: first, normalizedVelocity: .zero, size: 1),
+                RawTouchContact(identifier: 2, state: 4, normalizedPosition: second, normalizedVelocity: .zero, size: 1),
+            ]
+        )
+    }
+
+    private func point(_ x: CGFloat, _ y: CGFloat) -> NormalizedTouchPoint {
+        NormalizedTouchPoint(x: x, y: y)
     }
 
     private func load(_ name: String) throws -> GestureFixture {

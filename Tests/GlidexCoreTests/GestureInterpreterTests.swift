@@ -46,6 +46,21 @@ struct GestureInterpreterTests {
         #expect(gesture.intent == .pinch)
     }
 
+    @Test("pinch reports rotation relative to its initial finger axis")
+    func pinchRotation() {
+        var interpreter = GestureInterpreter()
+
+        #expect(interpreter.consume(frame(1, timestamp: 0, first: point(0.4, 0.5), second: point(0.6, 0.5))) == .pending)
+        _ = interpreter.consume(frame(2, timestamp: 0.02, first: point(0.38, 0.5), second: point(0.62, 0.5)))
+        let output = interpreter.consume(frame(3, timestamp: 0.04, first: point(0.4, 0.4), second: point(0.6, 0.6)))
+
+        guard case let .changed(gesture) = output else {
+            Issue.record("expected rotating pinch update")
+            return
+        }
+        #expect(abs(gesture.rotationDelta - .pi / 4) < 0.001)
+    }
+
     @Test("same-direction fingers with unequal speed remain navigation")
     func unequalSpeedSwipe() {
         var interpreter = GestureInterpreter()
