@@ -55,6 +55,85 @@ struct GestureReplayTests {
         #expect(try replay("single-finger-noise").isEmpty)
     }
 
+    @Test("trackpad click remains a mouse tap regardless of AppKit subtype")
+    func trackpadClick() {
+        let sink = ReplayRecordingSink()
+        let coordinator = makeCoordinator(sink: sink)
+
+        coordinator.beginMouse(at: CapturePoint(x: 120, y: 300))
+        coordinator.endMouse(at: CapturePoint(x: 120, y: 300))
+
+        #expect(sink.events.filter(\.isBegin).count == 1)
+        #expect(sink.events.filter(\.isEnd).count == 1)
+        #expect(sink.events.first?.snapshot?.source == .mouse)
+        #expect(sink.events.first?.snapshot?.intent == .point)
+    }
+
+    @Test("mouse down begins immediately so a held press remains active")
+    func longPressBeginsImmediately() {
+        let sink = ReplayRecordingSink()
+        let coordinator = makeCoordinator(sink: sink)
+
+        coordinator.beginMouse(at: CapturePoint(x: 120, y: 300))
+
+        #expect(sink.events.filter(\.isBegin).count == 1)
+        #expect(sink.events.filter(\.isEnd).isEmpty)
+        #expect(coordinator.inputStatus == "active")
+
+        coordinator.endMouse(at: CapturePoint(x: 120, y: 300))
+        #expect(sink.events.filter(\.isEnd).count == 1)
+    }
+
+    @Test("held mouse press can move before release")
+    func longPressDrag() {
+        let sink = ReplayRecordingSink()
+        let coordinator = makeCoordinator(sink: sink)
+
+        coordinator.beginMouse(at: CapturePoint(x: 120, y: 300))
+        coordinator.updateMouse(at: CapturePoint(x: 180, y: 320))
+        coordinator.endMouse(at: CapturePoint(x: 200, y: 340))
+
+        #expect(sink.events.filter(\.isBegin).count == 1)
+        #expect(sink.events.filter(\.isUpdate).count == 1)
+        #expect(sink.events.filter(\.isEnd).count == 1)
+        #expect(sink.events.allSatisfy { $0.snapshot?.gestureID == sink.events.first?.snapshot?.gestureID })
+    }
+
+    @Test("raw gesture cancels an active mouse press before taking ownership")
+    func rawGestureSupersedesActiveMouse() throws {
+        let fixture = try load("swipe-right")
+        let sink = ReplayRecordingSink()
+        let coordinator = makeCoordinator(sink: sink)
+
+        coordinator.beginMouse(at: CapturePoint(x: 120, y: 300))
+        fixture.frames.forEach(coordinator.handleRawFrame)
+        coordinator.endMouse(at: CapturePoint(x: 120, y: 300))
+
+        #expect(sink.events.filter { $0.snapshot?.source == .mouse && $0.isBegin }.count == 1)
+        #expect(sink.events.filter { $0.snapshot?.source == .mouse && $0.isCancel }.count == 1)
+        let rawEvents = sink.events.filter { $0.snapshot?.source == .rawTrackpad }
+        assertSingleLifecycle(rawEvents, expectedIntent: .navigate, contactCount: 1)
+        let mouseCancelIndex = try #require(sink.events.firstIndex { $0.snapshot?.source == .mouse && $0.isCancel })
+        let rawBeginIndex = try #require(sink.events.firstIndex { $0.snapshot?.source == .rawTrackpad && $0.isBegin })
+        #expect(mouseCancelIndex < rawBeginIndex)
+    }
+
+    @Test("mouse sequence cannot interrupt an active raw gesture")
+    func mouseCannotInterruptRawGesture() throws {
+        let fixture = try load("swipe-right")
+        let sink = ReplayRecordingSink()
+        let coordinator = makeCoordinator(sink: sink)
+        let split = fixture.frames.count / 2
+
+        fixture.frames[..<split].forEach(coordinator.handleRawFrame)
+        coordinator.beginMouse(at: CapturePoint(x: 120, y: 300))
+        coordinator.endMouse(at: CapturePoint(x: 120, y: 300))
+        fixture.frames[split...].forEach(coordinator.handleRawFrame)
+
+        assertSingleLifecycle(sink.events, expectedIntent: .navigate, contactCount: 1)
+        #expect(sink.events.allSatisfy { $0.snapshot?.source == .rawTrackpad })
+    }
+
     @Test("Navigate ignores a previously moved pointer")
     func navigateIgnoresPointer() throws {
         let fixture = try load("swipe-right")
@@ -84,7 +163,17 @@ struct GestureReplayTests {
         overridingMode: CaptureInputMode? = nil
     ) throws -> [TouchLifecycleEvent] {
         let sink = ReplayRecordingSink()
-        let coordinator = GestureCoordinator(
+        let coordinator = makeCoordinator(sink: sink)
+        coordinator.setMode(overridingMode ?? fixture.mode)
+        if let pointer = overridingPointer ?? fixture.pointer {
+            coordinator.updatePointer(pointer)
+        }
+        fixture.frames.forEach(coordinator.handleRawFrame)
+        return sink.events
+    }
+
+    private func makeCoordinator(sink: ReplayRecordingSink) -> GestureCoordinator {
+        GestureCoordinator(
             mapper: CoordinateMapper(
                 captureRect: CGRect(x: 0, y: 0, width: 402, height: 874),
                 simulatorSize: SimulatorPointSize(width: 402, height: 874)
@@ -92,12 +181,6 @@ struct GestureReplayTests {
             sink: sink,
             logger: Logger()
         )
-        coordinator.setMode(overridingMode ?? fixture.mode)
-        if let pointer = overridingPointer ?? fixture.pointer {
-            coordinator.updatePointer(pointer)
-        }
-        fixture.frames.forEach(coordinator.handleRawFrame)
-        return sink.events
     }
 
     private func load(_ name: String) throws -> GestureFixture {
@@ -132,6 +215,7 @@ private extension TouchLifecycleEvent {
     }
 
     var isBegin: Bool { if case .begin = self { true } else { false } }
+    var isUpdate: Bool { if case .update = self { true } else { false } }
     var isEnd: Bool { if case .end = self { true } else { false } }
     var isCancel: Bool { if case .cancel = self { true } else { false } }
     var isTapLike: Bool { isBegin && snapshot?.source == .mouse }

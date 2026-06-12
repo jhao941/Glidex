@@ -1,17 +1,35 @@
 import Foundation
 @MainActor
 public final class GestureCoordinator {
+    private enum InputOwner {
+        case mouse
+        case rawTouch
+    }
+
+    private struct RawGestureDiagnostics {
+        let gestureID: UUID
+        let startedAt: TimeInterval
+        let initialCentroid: NormalizedTouchPoint
+        let initialSimulatorPoint: SimulatorPoint
+        var lastCentroid: NormalizedTouchPoint
+        var lastSimulatorPoint: SimulatorPoint
+        var maximumCentroidDistance: CGFloat = 0
+        var maximumSimulatorDistance: CGFloat = 0
+        var updateCount = 0
+    }
+
     private let sink: TouchSink
     private let logger: Logger
     private var rawGestureInputProvider: () -> GestureInputSample
 
     private var mapper: CoordinateMapper
     private var interpreter = GestureInterpreter()
-    private var mouseState = MouseGestureStateMachine()
     private var activeTransaction: TouchTransaction?
     private var lastMousePoint: SimulatorPoint?
     private var pinchInitialRadius: CGFloat = 72
     private var pinchCurrentRadius: CGFloat = 72
+    private var rawGestureDiagnostics: RawGestureDiagnostics?
+    private var inputOwner: InputOwner?
 
     public private(set) var mode: CaptureInputMode = .navigate
     public private(set) var isAnchorLocked = false
@@ -75,6 +93,8 @@ public final class GestureCoordinator {
 
     public func beginMouse(at point: CapturePoint) {
         guard mode != .disabled else { return }
+        guard inputOwner != .rawTouch else { return }
+        inputOwner = .mouse
         if AnchorEditingPolicy.accepts(.down, mode: mode, isLocked: isAnchorLocked) {
             updatePointer(point)
             return
@@ -82,26 +102,34 @@ public final class GestureCoordinator {
         cancelActive(reason: "mouse input began")
         guard let simulatorPoint = mapper.simulatorPoint(fromCapture: point) else { return }
         lastMousePoint = simulatorPoint
-        handleMouseActions(mouseState.mouseDown(capture: point, simulator: simulatorPoint))
+        let transaction = makeMouseTransaction(anchor: simulatorPoint)
+        activeTransaction = transaction
+        transaction.begin(contacts: [TouchContactPoint(identifier: 0, point: simulatorPoint)])
+        onStateChange?()
     }
 
     public func updateMouse(at point: CapturePoint) {
+        guard inputOwner == .mouse else { return }
         if AnchorEditingPolicy.accepts(.drag, mode: mode, isLocked: isAnchorLocked) {
             updatePointer(point)
             return
         }
         guard mode != .disabled else { return }
         guard let simulatorPoint = mapper.projectedSimulatorPoint(fromCapture: point) else { return }
-        handleMouseActions(mouseState.mouseDragged(capture: point, simulator: simulatorPoint))
+        activeTransaction?.update(contacts: [TouchContactPoint(identifier: 0, point: simulatorPoint)])
     }
 
     public func endMouse(at point: CapturePoint?) {
+        guard inputOwner == .mouse else { return }
+        defer { inputOwner = nil }
         if ((mode == .point || mode == .edge) && !isAnchorLocked) || mode == .disabled { return }
         guard let point, let simulatorPoint = mapper.projectedSimulatorPoint(fromCapture: point) else {
-            handleMouseAction(mouseState.cancel())
+            cancelActive(reason: "mouse input ended outside capture")
             return
         }
-        handleMouseActions(mouseState.mouseUp(capture: point, simulator: simulatorPoint))
+        activeTransaction?.end(contacts: [TouchContactPoint(identifier: 0, point: simulatorPoint)])
+        activeTransaction = nil
+        onStateChange?()
     }
 
     public func handleRawFrame(_ frame: RawTouchFrame) {
@@ -121,8 +149,8 @@ public final class GestureCoordinator {
 
     public func cancelAll(reason: String) {
         _ = interpreter.cancel()
-        handleMouseAction(mouseState.cancel())
         cancelActive(reason: reason)
+        inputOwner = nil
     }
 
     public func prepareForDeviceChange() {
@@ -134,8 +162,8 @@ public final class GestureCoordinator {
     }
 
     private func beginRawGesture(_ gesture: InterpretedGesture) {
-        handleMouseAction(mouseState.cancel())
         cancelActive(reason: "raw gesture began")
+        inputOwner = .rawTouch
         let fallback = mapper.simulatorPoint(fromNormalizedTouch: gesture.initialCentroid)
         let sample = rawGestureInputProvider()
         let simulatorMouseLocation = sample.captureMouseLocation.flatMap(mapper.simulatorPoint(fromCapture:))
@@ -160,6 +188,25 @@ public final class GestureCoordinator {
         )
         activeGestureContext = context
         activeTransaction = transaction
+        let initialSimulatorPoint = navigationPoint(for: gesture, anchor: anchor)
+        let resolvedCentroidDistance = distance(from: gesture.initialCentroid, to: gesture.centroid)
+        rawGestureDiagnostics = RawGestureDiagnostics(
+            gestureID: transaction.gestureID,
+            startedAt: ProcessInfo.processInfo.systemUptime,
+            initialCentroid: gesture.initialCentroid,
+            initialSimulatorPoint: initialSimulatorPoint,
+            lastCentroid: gesture.centroid,
+            lastSimulatorPoint: initialSimulatorPoint,
+            maximumCentroidDistance: resolvedCentroidDistance
+        )
+        logger.info(
+            "event=input-diagnostic path=rawGesture phase=begin gestureID=\(transaction.gestureID) " +
+                "intent=\(gesture.intent.rawValue) contacts=\(gesture.contactIDs.map(String.init).joined(separator: ",")) " +
+                "centroidInitial=\(format(gesture.initialCentroid.x)),\(format(gesture.initialCentroid.y)) " +
+                "centroidResolved=\(format(gesture.centroid.x)),\(format(gesture.centroid.y)) " +
+                "centroidResolvedDistance=\(format(resolvedCentroidDistance)) " +
+                "simulatorPoint=\(format(initialSimulatorPoint.x)),\(format(initialSimulatorPoint.y))"
+        )
         onStateChange?()
 
         switch gesture.intent {
@@ -176,6 +223,7 @@ public final class GestureCoordinator {
 
     private func updateRawGesture(_ gesture: InterpretedGesture) {
         guard let transaction = activeTransaction, transaction.source == .rawTrackpad else { return }
+        updateRawGestureDiagnostics(gesture, anchor: transaction.anchor)
         switch gesture.intent {
         case .navigate:
             transaction.update(contacts: [TouchContactPoint(
@@ -190,10 +238,14 @@ public final class GestureCoordinator {
     }
 
     private func endRawGesture() {
+        guard inputOwner == .rawTouch else { return }
+        defer { inputOwner = nil }
         guard activeTransaction?.source == .rawTrackpad else { return }
+        logRawGestureDiagnostics()
         activeTransaction?.end()
         activeTransaction = nil
         activeGestureContext = nil
+        rawGestureDiagnostics = nil
         onStateChange?()
     }
 
@@ -204,36 +256,50 @@ public final class GestureCoordinator {
         }
         activeTransaction = nil
         activeGestureContext = nil
+        rawGestureDiagnostics = nil
         onStateChange?()
     }
 
-    private func handleMouseActions(_ actions: [MouseGestureAction]) {
-        for action in actions { handleMouseAction(action) }
+    private func updateRawGestureDiagnostics(_ gesture: InterpretedGesture, anchor: SimulatorPoint) {
+        guard var diagnostics = rawGestureDiagnostics else { return }
+        let simulatorPoint = navigationPoint(for: gesture, anchor: anchor)
+        diagnostics.lastCentroid = gesture.centroid
+        diagnostics.lastSimulatorPoint = simulatorPoint
+        diagnostics.maximumCentroidDistance = max(
+            diagnostics.maximumCentroidDistance,
+            distance(from: diagnostics.initialCentroid, to: gesture.centroid)
+        )
+        diagnostics.maximumSimulatorDistance = max(
+            diagnostics.maximumSimulatorDistance,
+            distance(from: diagnostics.initialSimulatorPoint, to: simulatorPoint)
+        )
+        diagnostics.updateCount += 1
+        rawGestureDiagnostics = diagnostics
     }
 
-    private func handleMouseAction(_ action: MouseGestureAction?) {
-        guard let action else { return }
-        switch action {
-        case let .tap(point):
-            let transaction = makeMouseTransaction(anchor: point)
-            let contact = [TouchContactPoint(identifier: 0, point: point)]
-            transaction.begin(contacts: contact)
-            transaction.end(contacts: contact)
-        case let .beginDrag(start, current):
-            let transaction = makeMouseTransaction(anchor: start)
-            activeTransaction = transaction
-            onStateChange?()
-            transaction.begin(contacts: [TouchContactPoint(identifier: 0, point: start)])
-            transaction.update(contacts: [TouchContactPoint(identifier: 0, point: current)])
-        case let .updateDrag(point):
-            activeTransaction?.update(contacts: [TouchContactPoint(identifier: 0, point: point)])
-        case let .endDrag(point):
-            activeTransaction?.end(contacts: [TouchContactPoint(identifier: 0, point: point)])
-            activeTransaction = nil
-            onStateChange?()
-        case .cancelDrag:
-            cancelActive(reason: "mouse drag cancelled")
-        }
+    private func logRawGestureDiagnostics() {
+        guard let diagnostics = rawGestureDiagnostics else { return }
+        let durationMilliseconds = (ProcessInfo.processInfo.systemUptime - diagnostics.startedAt) * 1_000
+        logger.info(
+            "event=input-diagnostic path=rawGesture phase=end gestureID=\(diagnostics.gestureID) " +
+                "durationMs=\(format(durationMilliseconds)) updates=\(diagnostics.updateCount) " +
+                "centroidFinalDistance=\(format(distance(from: diagnostics.initialCentroid, to: diagnostics.lastCentroid))) " +
+                "centroidMaxDistance=\(format(diagnostics.maximumCentroidDistance)) " +
+                "simulatorFinalDistance=\(format(distance(from: diagnostics.initialSimulatorPoint, to: diagnostics.lastSimulatorPoint))) " +
+                "simulatorMaxDistance=\(format(diagnostics.maximumSimulatorDistance))"
+        )
+    }
+
+    private func distance(from first: NormalizedTouchPoint, to second: NormalizedTouchPoint) -> CGFloat {
+        hypot(first.x - second.x, first.y - second.y)
+    }
+
+    private func distance(from first: SimulatorPoint, to second: SimulatorPoint) -> CGFloat {
+        hypot(first.x - second.x, first.y - second.y)
+    }
+
+    private func format(_ value: CGFloat) -> String {
+        String(format: "%.4f", Double(value))
     }
 
     private func makeMouseTransaction(anchor: SimulatorPoint) -> TouchTransaction {

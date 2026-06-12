@@ -3,6 +3,12 @@ import GlidexCore
 
 @MainActor
 final class CaptureView: NSView {
+    private enum MouseEventPhase: String {
+        case down
+        case dragged
+        case up
+    }
+
     var onMouseDown: ((CapturePoint) -> Void)?
     var onMouseDragged: ((CapturePoint) -> Void)?
     var onMouseUp: ((CapturePoint) -> Void)?
@@ -10,9 +16,10 @@ final class CaptureView: NSView {
 
     private var presentation = OverlayPresentation(snapshot: GlidexAppSnapshot())
     private var mouseTrackingArea: NSTrackingArea?
-    private var mouseInputGate = MouseInputGate()
+    private let logger: Logger
 
-    override init(frame frameRect: NSRect) {
+    init(frame frameRect: NSRect, logger: Logger) {
+        self.logger = logger
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
@@ -59,17 +66,17 @@ final class CaptureView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        guard shouldHandleMouseEvent(event, phase: .down) else { return }
+        logMouseEvent(event, phase: .down)
         onMouseDown?(CapturePoint(convert(event.locationInWindow, from: nil)))
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard shouldHandleMouseEvent(event, phase: .dragged) else { return }
+        logMouseEvent(event, phase: .dragged)
         onMouseDragged?(CapturePoint(convert(event.locationInWindow, from: nil)))
     }
 
     override func mouseUp(with event: NSEvent) {
-        guard shouldHandleMouseEvent(event, phase: .up) else { return }
+        logMouseEvent(event, phase: .up)
         onMouseUp?(CapturePoint(convert(event.locationInWindow, from: nil)))
     }
 
@@ -77,8 +84,21 @@ final class CaptureView: NSView {
         onMouseMoved?(CapturePoint(convert(event.locationInWindow, from: nil)))
     }
 
-    private func shouldHandleMouseEvent(_ event: NSEvent, phase: MouseInputPhase) -> Bool {
-        mouseInputGate.shouldHandle(phase, isTouchDerived: event.subtype == .touch)
+    private func logMouseEvent(_ event: NSEvent, phase: MouseEventPhase) {
+        let isTouchDerived = event.subtype == .touch
+        let location = convert(event.locationInWindow, from: nil)
+        let eventTimestamp = String(format: "%.6f", event.timestamp)
+        var message = "event=input-diagnostic path=mouse phase=\(phase.rawValue)"
+        message += " touchDerived=\(isTouchDerived)"
+        message += " subtype=\(event.subtype.rawValue) eventNumber=\(event.eventNumber)"
+        message += " clickCount=\(event.clickCount) button=\(event.buttonNumber)"
+        message += " pressure=\(format(CGFloat(event.pressure))) timestamp=\(eventTimestamp)"
+        message += " location=\(format(location.x)),\(format(location.y))"
+        logger.info(message)
+    }
+
+    private func format(_ value: CGFloat) -> String {
+        String(format: "%.2f", Double(value))
     }
 
     private func drawBorder() {

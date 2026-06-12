@@ -22,7 +22,7 @@ final class OverlayWindowController {
     var onMouseMoved: ((CapturePoint) -> Void)?
     var onCalibrationFrameChange: ((CGRect) -> Void)?
 
-    init(state: GlidexAppState) {
+    init(state: GlidexAppState, logger: Logger) {
         self.state = state
         self.window = NSPanel(
             contentRect: .zero,
@@ -30,7 +30,7 @@ final class OverlayWindowController {
             backing: .buffered,
             defer: false
         )
-        self.captureView = CaptureView(frame: .zero)
+        self.captureView = CaptureView(frame: .zero, logger: logger)
 
         configureWindow()
         configureInput()

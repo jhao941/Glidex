@@ -20,7 +20,7 @@ final class AppController: NSObject, NSApplicationDelegate {
             preferences: preferences.load()
         ))
         self.statusItemController = StatusItemController(state: state)
-        self.overlayWindowController = OverlayWindowController(state: state)
+        self.overlayWindowController = OverlayWindowController(state: state, logger: logger)
         super.init()
         do {
             self.captureSession = try CaptureSession(
