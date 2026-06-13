@@ -36,7 +36,20 @@ struct StatusItemPresentationTests {
         ))
 
         #expect(ready.optionAnchorText == "Available - hold Option")
+        #expect(!ready.showsOptionAnchorStatus)
         #expect(outside.optionAnchorText == "Pointer outside Simulator")
+        #expect(outside.showsOptionAnchorStatus)
         #expect(active.optionAnchorText == "Active at pointer")
+        #expect(active.showsOptionAnchorStatus)
+    }
+
+    @Test("Direct Touch is presented as a stable input mode")
+    func directTouchPresentation() {
+        let presentation = StatusItemPresentation(snapshot: GlidexAppSnapshot(
+            preferences: GlidexPreferenceValues(inputMode: .directTouch)
+        ))
+
+        #expect(presentation.modeText == "Direct Touch")
+        #expect(!presentation.showsOptionAnchorStatus)
     }
 }

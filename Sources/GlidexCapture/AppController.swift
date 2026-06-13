@@ -8,6 +8,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     private let state: GlidexAppState
     private let statusItemController: StatusItemController
     private let overlayWindowController: OverlayWindowController
+    private let diagnosticsWindowController: DiagnosticsWindowController
     private var captureSession: CaptureSession?
     private var stateObserver: UUID?
     private var lastSavedPreferences: GlidexPreferenceValues?
@@ -21,6 +22,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         ))
         self.statusItemController = StatusItemController(state: state)
         self.overlayWindowController = OverlayWindowController(state: state, logger: logger)
+        self.diagnosticsWindowController = DiagnosticsWindowController()
         super.init()
         do {
             self.captureSession = try CaptureSession(
@@ -77,23 +79,33 @@ final class AppController: NSObject, NSApplicationDelegate {
         statusItemController.onSetAnchorLocked = { [weak state] locked in
             state?.setAnchorLocked(locked)
         }
-        statusItemController.onSetCalibrationMode = { [weak state] enabled in
-            state?.setCalibrationMode(enabled)
-        }
         statusItemController.onReattach = { [weak self] in
             self?.captureSession?.reattach()
         }
         statusItemController.onDiagnostics = { [weak self] in
-            self?.showInformation(
-                title: "Glidex Diagnostics",
-                message: self?.diagnosticsMessage ?? "No diagnostics available"
+            guard let self else { return }
+            diagnosticsWindowController.show(
+                report: diagnosticsReport,
+                calibrationEnabled: state.snapshot.isCalibrationMode
             )
         }
-        statusItemController.onSettings = { [weak self] in
-            self?.showInformation(
-                title: "Glidex Settings",
-                message: "Use the menu bar controls to configure input mode, border visibility, and touch indicators."
-            )
+        diagnosticsWindowController.onRefresh = { [weak self] in
+            self?.diagnosticsReport ?? "Diagnostics unavailable"
+        }
+        diagnosticsWindowController.onReconnect = { [weak self] in
+            self?.captureSession?.reattach()
+        }
+        diagnosticsWindowController.onSetCalibrationMode = { [weak state] enabled in
+            state?.setCalibrationMode(enabled)
+        }
+        statusItemController.onAbout = {
+            NSApp.activate(ignoringOtherApps: true)
+            NSApp.orderFrontStandardAboutPanel(options: [
+                .applicationName: "Glidex",
+                .applicationVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Development",
+                .version: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "SwiftPM",
+                .credits: NSAttributedString(string: "Trackpad control for iOS Simulator\nhttps://github.com/jhao941/Glidex"),
+            ])
         }
         statusItemController.onQuit = { [weak self] in
             self?.captureSession?.shutdown()
@@ -101,32 +113,39 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
     }
 
-    private var diagnosticsMessage: String {
+    private var diagnosticsReport: String {
         let snapshot = state.snapshot
-        let target = snapshot.target.map { "\($0.name) [\($0.udid)]" } ?? "None"
-        let detail: String
-        switch snapshot.status {
-        case let .waiting(reason): detail = reason
-        case let .error(error): detail = "\(error.message)\n\(recoveryMessage(for: error))"
-        default: detail = snapshot.status.title
+        let recovery: String?
+        if case let .error(error) = snapshot.status {
+            recovery = recoveryMessage(for: error)
+        } else {
+            recovery = nil
         }
-        return "Status: \(detail)\nTarget: \(target)\nMode: \(snapshot.preferences.inputMode.rawValue)"
+        let diagnostics = captureSession?.diagnostics() ?? CaptureDiagnostics(
+            snapshot: snapshot,
+            rawTouchStreamRunning: false,
+            windowTrackingRunning: false,
+            hostDescriptor: nil,
+            overlayFrame: overlayWindowController.frame,
+            overlayVisible: overlayWindowController.isVisible
+        )
+        return diagnostics.report(recovery: recovery)
     }
 
     private func recoveryMessage(for error: GlidexRuntimeError) -> String {
         switch error {
         case .accessibilityPermission:
-            "Allow Glidex under System Settings > Privacy & Security > Accessibility, then choose Reattach to Simulator."
+            "Allow Glidex under System Settings > Privacy & Security > Accessibility, then choose Reconnect to Simulator."
         case .simulatorNotRunning:
-            "Boot and show one Simulator device, then choose Reattach to Simulator."
+            "Boot and show one Simulator device, then choose Reconnect to Simulator."
         case .ambiguousTarget:
-            "Leave one Simulator window visible or close unrelated Simulator windows, then reattach."
+            "Leave one Simulator window visible or close unrelated Simulator windows, then choose Reconnect to Simulator."
         case .multitouchUnavailable:
             "Reconnect the trackpad or restart Glidex. Diagnostics remain available from the CLI."
         case .hidInitialization:
             "Restart Simulator and Glidex. If the issue persists, run glidex probe from Terminal."
         case .other:
-            "Choose Reattach to Simulator. If the issue persists, run glidex probe from Terminal."
+            "Choose Reconnect to Simulator. If the issue persists, run glidex probe from Terminal."
         }
     }
 
@@ -139,14 +158,5 @@ final class AppController: NSObject, NSApplicationDelegate {
         case let .available(point):
             "available(\(Int(point.x)),\(Int(point.y)))"
         }
-    }
-
-    private func showInformation(title: String, message: String) {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = message
-        alert.addButton(withTitle: "OK")
-        NSApp.activate(ignoringOtherApps: true)
-        alert.runModal()
     }
 }

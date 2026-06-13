@@ -65,6 +65,7 @@ final class OverlayWindowController {
     }
 
     var frame: CGRect { window.frame }
+    var isVisible: Bool { window.isVisible }
 
     var windowAlpha: CGFloat { window.alphaValue }
 

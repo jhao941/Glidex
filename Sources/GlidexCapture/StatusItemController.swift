@@ -10,10 +10,9 @@ final class StatusItemController: NSObject {
     var onSetShowsActiveTouches: ((Bool) -> Void)?
     var onSetRequiresPointerOverSimulator: ((Bool) -> Void)?
     var onSetAnchorLocked: ((Bool) -> Void)?
-    var onSetCalibrationMode: ((Bool) -> Void)?
     var onReattach: (() -> Void)?
     var onDiagnostics: (() -> Void)?
-    var onSettings: (() -> Void)?
+    var onAbout: (() -> Void)?
     var onQuit: (() -> Void)?
 
     private let state: GlidexAppState
@@ -50,8 +49,11 @@ final class StatusItemController: NSObject {
 
         let menu = NSMenu()
         menu.addItem(labelItem("Status: \(statusText(snapshot.status))"))
-        menu.addItem(labelItem("Simulator: \(snapshot.target?.name ?? "None")"))
-        menu.addItem(labelItem("Option Anchor: \(presentation.optionAnchorText)"))
+        menu.addItem(labelItem("Device: \(snapshot.target?.name ?? "None")"))
+        menu.addItem(labelItem("Mode: \(presentation.modeText)"))
+        if presentation.showsOptionAnchorStatus {
+            menu.addItem(labelItem("Option Anchor: \(presentation.optionAnchorText)"))
+        }
         menu.addItem(.separator())
 
         menu.addItem(actionItem(
@@ -65,48 +67,59 @@ final class StatusItemController: NSObject {
             selected: snapshot.preferences.inputMode,
             selector: #selector(selectMode(_:)),
             itemTitle: { value in
-                value == .directTouch ? "Direct Touch (Experimental)  ⌃⌥D" : value.rawValue.capitalized
+                value == .directTouch ? "Direct Touch  ⌃⌥D" : value.rawValue.capitalized
             }
         ))
-        if snapshot.preferences.inputMode == .point || snapshot.preferences.inputMode == .edge {
-            menu.addItem(actionItem(
-                snapshot.anchorLockState == .locked ? "Edit Anchor Position" : "Lock Anchor",
-                action: #selector(toggleAnchorLock(_:))
-            ))
-        }
-        menu.addItem(submenuItem(
+        menu.addItem(appearanceMenu(snapshot))
+        menu.addItem(inputMenu(snapshot))
+        menu.addItem(.separator())
+        menu.addItem(actionItem("Reconnect to Simulator", action: #selector(reattach(_:))))
+        menu.addItem(actionItem("Diagnostics…", action: #selector(showDiagnostics(_:))))
+        menu.addItem(.separator())
+        menu.addItem(actionItem("About Glidex", action: #selector(showAbout(_:))))
+        menu.addItem(actionItem("Quit Glidex", action: #selector(quit(_:))))
+        statusItem.menu = menu
+    }
+
+    private func appearanceMenu(_ snapshot: GlidexAppSnapshot) -> NSMenuItem {
+        let parent = NSMenuItem(title: "Appearance", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        submenu.addItem(submenuItem(
             title: "Border Visibility",
             values: BorderVisibility.allCases,
             selected: snapshot.preferences.borderVisibility,
             selector: #selector(selectBorderVisibility(_:))
         ))
-        menu.addItem(actionItem(
+        submenu.addItem(actionItem(
             "Show Anchor Indicator",
             action: #selector(toggleAnchorIndicator(_:)),
             state: snapshot.preferences.showsAnchorIndicator
         ))
-        menu.addItem(actionItem(
+        submenu.addItem(actionItem(
             "Show Active Touches",
             action: #selector(toggleActiveTouches(_:)),
             state: snapshot.preferences.showsActiveTouches
         ))
-        menu.addItem(actionItem(
-            "Require Pointer Over Simulator",
+        parent.submenu = submenu
+        return parent
+    }
+
+    private func inputMenu(_ snapshot: GlidexAppSnapshot) -> NSMenuItem {
+        let parent = NSMenuItem(title: "Input", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        submenu.addItem(actionItem(
+            "Constrain Input to Simulator",
             action: #selector(toggleRequiresPointerOverSimulator(_:)),
             state: snapshot.preferences.requiresPointerOverSimulator
         ))
-        menu.addItem(.separator())
-        menu.addItem(actionItem("Reattach to Simulator", action: #selector(reattach(_:))))
-        menu.addItem(actionItem(
-            "Calibration Mode",
-            action: #selector(toggleCalibration(_:)),
-            state: snapshot.isCalibrationMode
-        ))
-        menu.addItem(actionItem("Diagnostics…", action: #selector(showDiagnostics(_:))))
-        menu.addItem(actionItem("Settings…", action: #selector(showSettings(_:))))
-        menu.addItem(.separator())
-        menu.addItem(actionItem("Quit Glidex", action: #selector(quit(_:))))
-        statusItem.menu = menu
+        if snapshot.preferences.inputMode == .point || snapshot.preferences.inputMode == .edge {
+            submenu.addItem(actionItem(
+                snapshot.anchorLockState == .locked ? "Edit Anchor Position" : "Lock Anchor",
+                action: #selector(toggleAnchorLock(_:))
+            ))
+        }
+        parent.submenu = submenu
+        return parent
     }
 
     private func statusText(_ status: GlidexRuntimeStatus) -> String {
@@ -194,12 +207,8 @@ final class StatusItemController: NSObject {
         onSetAnchorLocked?(state.snapshot.anchorLockState != .locked)
     }
 
-    @objc private func toggleCalibration(_ sender: NSMenuItem) {
-        onSetCalibrationMode?(sender.state != .on)
-    }
-
     @objc private func reattach(_ sender: NSMenuItem) { onReattach?() }
     @objc private func showDiagnostics(_ sender: NSMenuItem) { onDiagnostics?() }
-    @objc private func showSettings(_ sender: NSMenuItem) { onSettings?() }
+    @objc private func showAbout(_ sender: NSMenuItem) { onAbout?() }
     @objc private func quit(_ sender: NSMenuItem) { onQuit?() }
 }

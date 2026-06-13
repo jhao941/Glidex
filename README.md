@@ -102,11 +102,13 @@ Private framework loading follows the selected host's containing Xcode first, th
 The menu bar controls provide:
 
 - enable/pause with safe input passthrough
-- Navigate, Point, and Edge modes (Navigate is the default)
+- Navigate, Direct Touch, Point, and Edge modes (Navigate is the default)
 - Hidden, Subtle, Normal, and Strong border visibility
 - Lock Anchor / Edit Anchor Position in Point and Edge modes
 - independent Show Anchor Indicator and Show Active Touches switches
-- reattach, calibration, diagnostics, settings, and quit actions
+- Simulator input constraint and reconnect controls
+- a copyable Diagnostics window with runtime, permission, host, and input-pipeline details
+- Calibration Mode from Diagnostics, plus About and Quit actions
 
 In Navigate mode, hold Option when a raw trackpad gesture begins to anchor only that gesture at the current mouse position inside the Simulator. The modifier, desktop mouse position, converted Simulator point, and final anchor policy are latched once at gesture begin. Releasing Option mid-gesture does not move or cancel the transaction. A pointer outside the Simulator safely falls back to ordinary Navigate behavior.
 

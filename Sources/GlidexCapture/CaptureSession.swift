@@ -87,6 +87,17 @@ final class CaptureSession {
         attemptAttach(promptForAccessibility: true)
     }
 
+    func diagnostics() -> CaptureDiagnostics {
+        CaptureDiagnostics(
+            snapshot: state.snapshot,
+            rawTouchStreamRunning: rawTouchStream != nil,
+            windowTrackingRunning: windowTracker.isFollowing,
+            hostDescriptor: lastHostTarget?.descriptor,
+            overlayFrame: overlay.frame,
+            overlayVisible: overlay.isVisible
+        )
+    }
+
     func shutdown() {
         retryTimer?.invalidate()
         retryTimer = nil

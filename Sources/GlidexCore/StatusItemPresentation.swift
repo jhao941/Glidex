@@ -3,11 +3,16 @@ import Foundation
 public struct StatusItemPresentation: Equatable, Sendable {
     public var symbolName: String
     public var optionAnchorText: String
+    public var modeText: String
+    public var showsOptionAnchorStatus: Bool
     public var usesTemplateImage: Bool { true }
 
     public init(snapshot: GlidexAppSnapshot) {
         self.symbolName = Self.symbolName(for: snapshot.status)
         self.optionAnchorText = Self.optionAnchorText(for: snapshot)
+        self.modeText = Self.modeText(for: snapshot.preferences.inputMode)
+        self.showsOptionAnchorStatus = snapshot.preferences.inputMode == .navigate &&
+            snapshot.optionAnchorAvailability != .inactive
     }
 
     private static func symbolName(for status: GlidexRuntimeStatus) -> String {
@@ -27,6 +32,13 @@ public struct StatusItemPresentation: Equatable, Sendable {
         case .inactive: return "Available - hold Option"
         case .outsideSimulator: return "Pointer outside Simulator"
         case .available: return "Active at pointer"
+        }
+    }
+
+    private static func modeText(for mode: CaptureInputMode) -> String {
+        switch mode {
+        case .directTouch: "Direct Touch"
+        default: mode.rawValue.capitalized
         }
     }
 }
