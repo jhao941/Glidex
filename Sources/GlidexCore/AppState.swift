@@ -93,6 +93,7 @@ public struct GlidexPreferenceValues: Codable, Equatable, Sendable {
     public var showsAnchorIndicator: Bool
     public var showsActiveTouches: Bool
     public var prefersAnchorLocked: Bool
+    public var requiresPointerOverSimulator: Bool
 
     public init(
         isEnabled: Bool = true,
@@ -100,7 +101,8 @@ public struct GlidexPreferenceValues: Codable, Equatable, Sendable {
         borderVisibility: BorderVisibility = .subtle,
         showsAnchorIndicator: Bool = true,
         showsActiveTouches: Bool = true,
-        prefersAnchorLocked: Bool = false
+        prefersAnchorLocked: Bool = false,
+        requiresPointerOverSimulator: Bool = true
     ) {
         self.isEnabled = isEnabled
         self.inputMode = inputMode == .disabled ? .navigate : inputMode
@@ -108,6 +110,7 @@ public struct GlidexPreferenceValues: Codable, Equatable, Sendable {
         self.showsAnchorIndicator = showsAnchorIndicator
         self.showsActiveTouches = showsActiveTouches
         self.prefersAnchorLocked = prefersAnchorLocked
+        self.requiresPointerOverSimulator = requiresPointerOverSimulator
     }
 
     public init(
@@ -137,6 +140,7 @@ public struct GlidexPreferenceValues: Codable, Equatable, Sendable {
         case showsAnchorIndicator
         case showsActiveTouches
         case prefersAnchorLocked
+        case requiresPointerOverSimulator
     }
 
     public init(from decoder: Decoder) throws {
@@ -148,7 +152,8 @@ public struct GlidexPreferenceValues: Codable, Equatable, Sendable {
             borderVisibility: try values.decodeIfPresent(BorderVisibility.self, forKey: .borderVisibility) ?? .subtle,
             showsAnchorIndicator: try values.decodeIfPresent(Bool.self, forKey: .showsAnchorIndicator) ?? legacyIndicator ?? true,
             showsActiveTouches: try values.decodeIfPresent(Bool.self, forKey: .showsActiveTouches) ?? legacyIndicator ?? true,
-            prefersAnchorLocked: try values.decodeIfPresent(Bool.self, forKey: .prefersAnchorLocked) ?? false
+            prefersAnchorLocked: try values.decodeIfPresent(Bool.self, forKey: .prefersAnchorLocked) ?? false,
+            requiresPointerOverSimulator: try values.decodeIfPresent(Bool.self, forKey: .requiresPointerOverSimulator) ?? true
         )
     }
 
@@ -160,6 +165,7 @@ public struct GlidexPreferenceValues: Codable, Equatable, Sendable {
         try values.encode(showsAnchorIndicator, forKey: .showsAnchorIndicator)
         try values.encode(showsActiveTouches, forKey: .showsActiveTouches)
         try values.encode(prefersAnchorLocked, forKey: .prefersAnchorLocked)
+        try values.encode(requiresPointerOverSimulator, forKey: .requiresPointerOverSimulator)
     }
 
     public var showsTouchIndicator: Bool {
@@ -294,6 +300,12 @@ public final class GlidexAppState {
         var next = snapshot
         next.preferences.showsActiveTouches = shows
         if !shows { next.activeTouches = [] }
+        commit(next)
+    }
+
+    public func setRequiresPointerOverSimulator(_ requires: Bool) {
+        var next = snapshot
+        next.preferences.requiresPointerOverSimulator = requires
         commit(next)
     }
 

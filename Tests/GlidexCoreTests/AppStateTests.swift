@@ -9,7 +9,15 @@ struct AppStateTests {
         let state = GlidexAppState()
         #expect(state.snapshot.preferences.isEnabled)
         #expect(state.snapshot.preferences.inputMode == .navigate)
+        #expect(state.snapshot.preferences.requiresPointerOverSimulator)
         #expect(state.snapshot.status == .waiting("Looking for Simulator"))
+    }
+
+    @Test("pointer requirement can be disabled")
+    func pointerRequirement() {
+        let state = GlidexAppState()
+        state.setRequiresPointerOverSimulator(false)
+        #expect(!state.snapshot.preferences.requiresPointerOverSimulator)
     }
 
     @Test("disabling pauses and enabling returns to waiting")

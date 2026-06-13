@@ -31,6 +31,7 @@ final class SimulatorWindowTracker {
         var observedElement: AXUIElement?
 
         var frame: CGRect { descriptor.contentFrame }
+        var windowFrame: CGRect { descriptor.windowFrame }
         var windowTitle: String? { descriptor.windowTitle }
         var ownerPID: pid_t { descriptor.ownerPID }
 

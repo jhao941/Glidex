@@ -14,6 +14,10 @@ final class OverlayWindowController {
     private var stateObserver: UUID?
     private var calibrationDrag: CalibrationDrag?
     private var acceptedInput = false
+    private var hostWindowNumber: Int?
+    private var hostOwnerPID: pid_t?
+    private var followsHostOcclusion = false
+    private var workspaceObservers: [NSObjectProtocol] = []
 
     var onInputDeactivated: (() -> Void)?
     var onMouseDown: ((CapturePoint) -> Void)?
@@ -34,15 +38,18 @@ final class OverlayWindowController {
 
         configureWindow()
         configureInput()
+        observeWorkspace()
         stateObserver = state.observe { [weak self] snapshot in
             self?.apply(snapshot)
         }
     }
 
-    func show(frame: CGRect) {
+    func show(frame: CGRect, hostWindowNumber: Int?, hostOwnerPID: pid_t) {
         guard frame.width > 0, frame.height > 0 else { return }
+        self.hostWindowNumber = hostWindowNumber
+        self.hostOwnerPID = hostOwnerPID
         window.setFrame(frame, display: true)
-        window.orderFrontRegardless()
+        orderRelativeToHost()
     }
 
     func hide() {
@@ -62,13 +69,20 @@ final class OverlayWindowController {
     var windowAlpha: CGFloat { window.alphaValue }
 
     var ignoresMouseEvents: Bool { window.ignoresMouseEvents }
+    var windowNumber: Int { window.windowNumber }
+
+    func setFollowsHostOcclusion(_ follows: Bool) {
+        guard followsHostOcclusion != follows else { return }
+        followsHostOcclusion = follows
+        orderRelativeToHost()
+    }
 
     private func configureWindow() {
         window.isOpaque = false
         window.backgroundColor = .clear
         window.alphaValue = OverlayPresentation.windowAlpha
         window.hasShadow = false
-        window.level = .floating
+        window.level = .normal
         window.hidesOnDeactivate = false
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.contentView = captureView
@@ -117,6 +131,45 @@ final class OverlayWindowController {
         window.ignoresMouseEvents = !presentation.acceptsInput
         window.alphaValue = OverlayPresentation.windowAlpha
         captureView.render(snapshot: snapshot)
+    }
+
+    private func observeWorkspace() {
+        let center = NSWorkspace.shared.notificationCenter
+        workspaceObservers.append(center.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey]
+                    as? NSRunningApplication else { return }
+            Task { @MainActor [weak self] in
+                guard let self, application.processIdentifier == hostOwnerPID else { return }
+                orderRelativeToHost()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                    self?.orderRelativeToHost()
+                }
+            }
+        })
+        workspaceObservers.append(center.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                DispatchQueue.main.async { [weak self] in self?.orderRelativeToHost() }
+            }
+        })
+    }
+
+    private func orderRelativeToHost() {
+        guard window.isVisible || window.frame.width > 0 else { return }
+        guard followsHostOcclusion, let hostWindowNumber else {
+            window.level = .floating
+            window.orderFrontRegardless()
+            return
+        }
+        window.level = .normal
+        window.order(.above, relativeTo: hostWindowNumber)
     }
 
     private func beginCalibration(at point: CapturePoint) {

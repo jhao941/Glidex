@@ -8,6 +8,7 @@ final class StatusItemController: NSObject {
     var onSetBorderVisibility: ((BorderVisibility) -> Void)?
     var onSetShowsAnchorIndicator: ((Bool) -> Void)?
     var onSetShowsActiveTouches: ((Bool) -> Void)?
+    var onSetRequiresPointerOverSimulator: ((Bool) -> Void)?
     var onSetAnchorLocked: ((Bool) -> Void)?
     var onSetCalibrationMode: ((Bool) -> Void)?
     var onReattach: (() -> Void)?
@@ -85,6 +86,11 @@ final class StatusItemController: NSObject {
             "Show Active Touches",
             action: #selector(toggleActiveTouches(_:)),
             state: snapshot.preferences.showsActiveTouches
+        ))
+        menu.addItem(actionItem(
+            "Require Pointer Over Simulator",
+            action: #selector(toggleRequiresPointerOverSimulator(_:)),
+            state: snapshot.preferences.requiresPointerOverSimulator
         ))
         menu.addItem(.separator())
         menu.addItem(actionItem("Reattach to Simulator", action: #selector(reattach(_:))))
@@ -174,6 +180,10 @@ final class StatusItemController: NSObject {
 
     @objc private func toggleActiveTouches(_ sender: NSMenuItem) {
         onSetShowsActiveTouches?(sender.state != .on)
+    }
+
+    @objc private func toggleRequiresPointerOverSimulator(_ sender: NSMenuItem) {
+        onSetRequiresPointerOverSimulator?(sender.state != .on)
     }
 
     @objc private func toggleAnchorLock(_ sender: NSMenuItem) {

@@ -41,7 +41,7 @@ final class AppController: NSObject, NSApplicationDelegate {
                 preferences.save(snapshot.preferences)
                 lastSavedPreferences = snapshot.preferences
             }
-            let logState = "app status=\(snapshot.status.title) enabled=\(snapshot.preferences.isEnabled) mode=\(snapshot.preferences.inputMode.rawValue) anchorLock=\(snapshot.anchorLockState.rawValue) anchorIndicator=\(snapshot.preferences.showsAnchorIndicator) activeTouchIndicator=\(snapshot.preferences.showsActiveTouches) activeTouches=\(snapshot.activeTouches.count) optionAnchor=\(optionAnchorLogValue(snapshot.optionAnchorAvailability)) target=\(snapshot.target?.udid ?? "none")"
+            let logState = "app status=\(snapshot.status.title) enabled=\(snapshot.preferences.isEnabled) mode=\(snapshot.preferences.inputMode.rawValue) requirePointer=\(snapshot.preferences.requiresPointerOverSimulator) anchorLock=\(snapshot.anchorLockState.rawValue) anchorIndicator=\(snapshot.preferences.showsAnchorIndicator) activeTouchIndicator=\(snapshot.preferences.showsActiveTouches) activeTouches=\(snapshot.activeTouches.count) optionAnchor=\(optionAnchorLogValue(snapshot.optionAnchorAvailability)) target=\(snapshot.target?.udid ?? "none")"
             if lastLoggedState != logState {
                 logger.info(logState)
                 lastLoggedState = logState
@@ -70,6 +70,9 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
         statusItemController.onSetShowsActiveTouches = { [weak state] shows in
             state?.setShowsActiveTouches(shows)
+        }
+        statusItemController.onSetRequiresPointerOverSimulator = { [weak state] requires in
+            state?.setRequiresPointerOverSimulator(requires)
         }
         statusItemController.onSetAnchorLocked = { [weak state] locked in
             state?.setAnchorLocked(locked)

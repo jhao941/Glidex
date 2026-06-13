@@ -14,7 +14,8 @@ struct GlidexPreferencesTests {
             borderVisibility: .strong,
             showsAnchorIndicator: false,
             showsActiveTouches: true,
-            prefersAnchorLocked: true
+            prefersAnchorLocked: true,
+            requiresPointerOverSimulator: false
         )
         preferences.save(expected)
         #expect(preferences.load() == expected)
@@ -24,6 +25,7 @@ struct GlidexPreferencesTests {
     func defaults() {
         #expect(GlidexPreferences(store: MemoryPreferencesStore()).load() == .defaults)
         #expect(GlidexPreferenceValues.defaults.isEnabled)
+        #expect(GlidexPreferenceValues.defaults.requiresPointerOverSimulator)
     }
 
     @Test("legacy touch indicator migrates to both independent indicators")
@@ -35,6 +37,7 @@ struct GlidexPreferencesTests {
         #expect(decoded.borderVisibility == .strong)
         #expect(!decoded.showsAnchorIndicator)
         #expect(!decoded.showsActiveTouches)
+        #expect(decoded.requiresPointerOverSimulator)
     }
 }
 

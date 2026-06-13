@@ -4,6 +4,12 @@ import GlidexCore
 
 @MainActor
 final class CaptureSession {
+    private enum RawInputAdmission: Equatable {
+        case idle
+        case allowed
+        case blocked
+    }
+
     private static let fallbackSimulatorSize = SimulatorPointSize(width: 402, height: 874)
 
     private let logger: Logger
@@ -31,6 +37,7 @@ final class CaptureSession {
     private var isAttaching = false
     private var globalModifierMonitor: Any?
     private var localModifierMonitor: Any?
+    private var rawInputAdmission: RawInputAdmission = .idle
 
     init(
         logger: Logger,
@@ -91,16 +98,16 @@ final class CaptureSession {
             self?.coordinator.cancelAll(reason: "overlay input deactivated")
         }
         overlay.onMouseDown = { [weak self] point in
-            guard self?.canInjectInput == true else { return }
-            self?.coordinator.beginMouse(at: point)
+            guard let self, canInjectInput else { return }
+            coordinator.beginMouse(at: point)
         }
         overlay.onMouseDragged = { [weak self] point in
-            guard self?.canInjectInput == true else { return }
-            self?.coordinator.updateMouse(at: point)
+            guard let self, canInjectInput else { return }
+            coordinator.updateMouse(at: point)
         }
         overlay.onMouseUp = { [weak self] point in
-            guard self?.canInjectInput == true else { return }
-            self?.coordinator.endMouse(at: point)
+            guard let self, canInjectInput else { return }
+            coordinator.endMouse(at: point)
         }
         overlay.onMouseMoved = { [weak self] _ in
             guard let self, canInjectInput else { return }
@@ -125,6 +132,7 @@ final class CaptureSession {
     }
 
     private func apply(_ snapshot: GlidexAppSnapshot) {
+        overlay.setFollowsHostOcclusion(snapshot.preferences.requiresPointerOverSimulator)
         coordinator.setMode(snapshot.preferences.inputMode)
         coordinator.setAnchorLocked(snapshot.anchorLockState == .locked)
         refreshAnchorIndicator()
@@ -251,7 +259,7 @@ final class CaptureSession {
                     if frame.contacts.isEmpty { self.awaitsTouchRelease = false }
                     return
                 }
-                self.coordinator.handleRawFrame(frame)
+                self.handleRawFrameWithAdmission(frame)
             }
         }
         do {
@@ -336,7 +344,11 @@ final class CaptureSession {
         selectedTarget = orientedTarget
         lastTrackedFrame = tracked.frame
         lastSimulatorPID = tracked.ownerPID
-        overlay.show(frame: geometry.desktopFrame)
+        overlay.show(
+            frame: geometry.desktopFrame,
+            hostWindowNumber: PointerInputEligibility.hostWindowNumber(for: tracked),
+            hostOwnerPID: tracked.ownerPID
+        )
         coordinator.updateMapper(geometry.mapper)
         state.setActiveTouches([])
         refreshAnchorIndicator()
@@ -401,6 +413,7 @@ final class CaptureSession {
         rawTouchStream = nil
         rawStreamGeneration += 1
         awaitsTouchRelease = false
+        rawInputAdmission = .idle
         windowTracker.stop()
     }
 
@@ -423,6 +436,34 @@ final class CaptureSession {
 
     private var isOptionPressed: Bool {
         CGEventSource.flagsState(.combinedSessionState).contains(.maskAlternate)
+    }
+
+    private func handleRawFrameWithAdmission(_ frame: RawTouchFrame) {
+        let activeContactCount = frame.contacts.filter(\.isActive).count
+        switch rawInputAdmission {
+        case .idle:
+            if activeContactCount >= 2 {
+                rawInputAdmission = allowsNewInputAtPointer() ? .allowed : .blocked
+            }
+            if rawInputAdmission != .blocked {
+                coordinator.handleRawFrame(frame)
+            }
+        case .allowed:
+            coordinator.handleRawFrame(frame)
+        case .blocked:
+            break
+        }
+        if activeContactCount == 0 {
+            rawInputAdmission = .idle
+        }
+    }
+
+    private func allowsNewInputAtPointer() -> Bool {
+        guard state.snapshot.preferences.requiresPointerOverSimulator else { return true }
+        return PointerInputEligibility.isEligible(
+            pointer: DesktopPoint(NSEvent.mouseLocation),
+            overlay: overlay
+        )
     }
 
     private func currentRawGestureInputSample() -> GestureInputSample {
