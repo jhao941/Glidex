@@ -54,6 +54,8 @@ public struct GestureInputContext: Equatable, Sendable {
             policy = optionPressed && simulatorMouseLocation != nil
                 ? .point(simulatorMouseLocation)
                 : .navigate
+        case .directTouch:
+            policy = .navigate
         case .point:
             policy = .point(fixedPoint)
         case .edge:

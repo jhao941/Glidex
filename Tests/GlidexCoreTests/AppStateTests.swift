@@ -38,6 +38,16 @@ struct AppStateTests {
         #expect(state.snapshot.preferences.inputMode == .navigate)
     }
 
+    @Test("Direct Touch does not expose anchor locking")
+    func directTouchAnchorPolicy() {
+        let state = GlidexAppState()
+        state.setInputMode(.directTouch)
+        #expect(state.snapshot.preferences.inputMode == .directTouch)
+        #expect(state.snapshot.anchorLockState == .unavailable)
+        state.setAnchorLocked(true)
+        #expect(!state.snapshot.preferences.prefersAnchorLocked)
+    }
+
     @Test("errors retain a specific recovery reason")
     func errorState() {
         let state = GlidexAppState()

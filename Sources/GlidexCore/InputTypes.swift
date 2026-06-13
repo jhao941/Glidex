@@ -105,13 +105,19 @@ public enum GestureIntent: String, Equatable, Sendable {
     case navigate
     case edge
     case pinch
+    case directTouch
 }
 
 public enum CaptureInputMode: String, Codable, CaseIterable, Equatable, Sendable {
     case navigate
+    case directTouch
     case point
     case edge
     case disabled
+
+    public var supportsAnchor: Bool {
+        self == .point || self == .edge
+    }
 }
 
 public struct TouchContactPoint: Equatable, Sendable {

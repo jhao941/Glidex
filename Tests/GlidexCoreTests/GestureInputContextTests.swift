@@ -104,6 +104,21 @@ struct GestureInputContextTests {
         #expect(firstSink.firstSnapshot?.anchor == secondSink.firstSnapshot?.anchor)
     }
 
+    @Test("Direct Touch never adopts a temporary Option anchor")
+    func directTouchIgnoresOptionAnchor() {
+        let context = GestureInputContext.resolve(
+            persistentMode: .directTouch,
+            optionPressed: true,
+            globalMouseLocation: DesktopPoint(x: 1_000, y: 700),
+            simulatorMouseLocation: SimulatorPoint(x: 350, y: 100),
+            fixedPoint: SimulatorPoint(x: 60, y: 100),
+            fallback: SimulatorPoint(x: 200, y: 400),
+            simulatorSize: SimulatorPointSize(width: 400, height: 800)
+        )
+
+        #expect(context.anchorPolicy == .navigate)
+    }
+
     @Test("Point and Edge ignore the temporary Option anchor")
     func persistentModesStayIsolated() throws {
         let fixture = try loadSwipe()

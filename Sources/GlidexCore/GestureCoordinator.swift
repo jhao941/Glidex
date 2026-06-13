@@ -80,12 +80,12 @@ public final class GestureCoordinator {
         guard self.mode != mode else { return }
         cancelAll(reason: "input mode changed")
         self.mode = mode
-        if mode == .navigate || mode == .disabled { isAnchorLocked = false }
+        if !mode.supportsAnchor { isAnchorLocked = false }
         onStateChange?()
     }
 
     public func setAnchorLocked(_ locked: Bool) {
-        let effective = (mode == .point || mode == .edge) && locked
+        let effective = mode.supportsAnchor && locked
         guard isAnchorLocked != effective else { return }
         cancelAll(reason: "anchor lock changed")
         isAnchorLocked = effective

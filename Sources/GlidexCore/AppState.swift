@@ -203,7 +203,7 @@ public struct GlidexAppSnapshot: Equatable, Sendable {
         self.isCalibrationMode = isCalibrationMode
         self.optionAnchorAvailability = optionAnchorAvailability
         self.anchorLockState = anchorLockState ?? (
-            preferences.inputMode == .navigate
+            !preferences.inputMode.supportsAnchor
                 ? .unavailable
                 : (preferences.prefersAnchorLocked ? .locked : .unlocked)
         )
@@ -263,14 +263,14 @@ public final class GlidexAppState {
     public func setInputMode(_ mode: CaptureInputMode) {
         var next = snapshot
         next.preferences.inputMode = mode == .disabled ? .navigate : mode
-        next.anchorLockState = next.preferences.inputMode == .navigate
+        next.anchorLockState = !next.preferences.inputMode.supportsAnchor
             ? .unavailable
             : (next.preferences.prefersAnchorLocked ? .locked : .unlocked)
         commit(next)
     }
 
     public func setAnchorLocked(_ locked: Bool) {
-        guard snapshot.preferences.inputMode == .point || snapshot.preferences.inputMode == .edge else { return }
+        guard snapshot.preferences.inputMode.supportsAnchor else { return }
         var next = snapshot
         next.preferences.prefersAnchorLocked = locked
         next.anchorLockState = locked ? .locked : .unlocked
@@ -278,7 +278,7 @@ public final class GlidexAppState {
     }
 
     public func resetAnchorLockForAttachment() {
-        guard snapshot.preferences.inputMode == .point || snapshot.preferences.inputMode == .edge else { return }
+        guard snapshot.preferences.inputMode.supportsAnchor else { return }
         var next = snapshot
         next.anchorLockState = .unlocked
         commit(next)
