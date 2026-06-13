@@ -2,9 +2,10 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-| 默认 | 深色 |
-|:---:|:---:|
-| <img src="docs/images/glidex-default.png" alt="Glidex 默认图标" width="280"> | <img src="docs/images/glidex-dark.png" alt="Glidex 深色图标" width="280"> |
+<p align="center">
+  <img src="docs/images/glidex-default.png" alt="Glidex 图标" width="280">
+  <img src="docs/images/glidex-dark.png" alt="Glidex 图标" width="280">
+</p>
 
 Glidex 将 Mac 触控板转换为已启动的 iPhone Simulator 的多点触控输入。它是一个轻量级 macOS 菜单栏应用，支持 Navigate、锚定 Point/Edge 输入、一至五指 Direct Touch，以及手势录制和回放。
 

@@ -2,9 +2,10 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-| Default | Dark |
-|:---:|:---:|
-| <img src="docs/images/glidex-default.png" alt="Glidex default icon" width="280"> | <img src="docs/images/glidex-dark.png" alt="Glidex dark icon" width="280"> |
+<p align="center">
+  <img src="docs/images/glidex-default.png" alt="Glidex icon" width="280">
+  <img src="docs/images/glidex-dark.png" alt="Glidex icon" width="280">
+</p>
 
 Glidex turns a Mac trackpad into multitouch input for a booted iPhone
 Simulator. It is a lightweight macOS menu bar app with Navigate, anchored
