@@ -1,5 +1,7 @@
 # Contributing
 
+[English](CONTRIBUTING.md) | [简体中文](CONTRIBUTING.zh-CN.md)
+
 Glidex uses undocumented Apple frameworks and trackpad APIs. Small, focused
 changes with reproducible evidence are much easier to review than broad
 compatibility guesses.

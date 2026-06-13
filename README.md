@@ -1,5 +1,11 @@
 # Glidex
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
+| Default | Dark |
+|:---:|:---:|
+| <img src="docs/images/glidex-default.png" alt="Glidex default icon" width="280"> | <img src="docs/images/glidex-dark.png" alt="Glidex dark icon" width="280"> |
+
 Glidex turns a Mac trackpad into multitouch input for a booted iPhone
 Simulator. It is a lightweight macOS menu bar app with Navigate, anchored
 Point/Edge input, one-to-five-finger Direct Touch, and gesture recording and
@@ -53,6 +59,15 @@ open dist/Glidex.app
 
 The script produces an ad-hoc-signed development app. It is not notarized and
 is not intended to bypass Gatekeeper distribution requirements.
+
+To build a drag-to-install disk image:
+
+```bash
+./scripts/build-dmg.sh
+```
+
+The resulting `dist/Glidex-0.1.0.dmg` contains Glidex and an Applications
+shortcut. It has the same signing status as the app bundle inside it.
 
 ## Input Modes
 

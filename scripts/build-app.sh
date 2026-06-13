@@ -8,14 +8,28 @@ DIST="${GLIDEX_DIST_DIR:-$ROOT/dist}"
 APP="$DIST/Glidex.app"
 CONTENTS="$APP/Contents"
 MACOS="$CONTENTS/MacOS"
+RESOURCES="$CONTENTS/Resources"
+ICON_SOURCE="$ROOT/Resources/Glidex.icon"
+ICON_FALLBACK="$ROOT/Resources/Glidex.icns"
 
 cd "$ROOT"
 swift build -c release
 
 rm -rf "$APP"
-mkdir -p "$MACOS"
+mkdir -p "$MACOS" "$RESOURCES"
 cp ".build/release/glidex-capture" "$MACOS/Glidex"
 cp ".build/release/glidex" "$DIST/glidex"
+
+# Xcode 26 compiles Icon Composer projects into both Liquid Glass assets and
+# a compatibility ICNS. Older actool versions fall back to the committed ICNS.
+if ! xcrun actool "$ICON_SOURCE" \
+    --compile "$RESOURCES" \
+    --platform macosx \
+    --minimum-deployment-target 14.0 \
+    --app-icon Glidex \
+    --output-partial-info-plist "$DIST/Glidex-icon-info.plist" >/dev/null 2>&1; then
+    cp "$ICON_FALLBACK" "$RESOURCES/Glidex.icns"
+fi
 
 cat > "$CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -28,6 +42,10 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <string>Glidex</string>
     <key>CFBundleIdentifier</key>
     <string>io.github.jhao941.Glidex</string>
+    <key>CFBundleIconFile</key>
+    <string>Glidex</string>
+    <key>CFBundleIconName</key>
+    <string>Glidex</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
@@ -49,7 +67,14 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 PLIST
 
 plutil -lint "$CONTENTS/Info.plist"
-codesign --force --deep --sign - "$APP"
+
+SIGN_IDENTITY="${GLIDEX_SIGN_IDENTITY:--}"
+if [[ "$SIGN_IDENTITY" == "-" ]]; then
+    codesign --force --deep --sign - "$APP"
+else
+    codesign --force --deep --options runtime --timestamp \
+        --sign "$SIGN_IDENTITY" "$APP"
+fi
 
 echo "Built $APP"
 echo "Built $DIST/glidex"

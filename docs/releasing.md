@@ -1,11 +1,14 @@
 # Releasing Glidex
 
+[English](releasing.md) | [简体中文](releasing.zh-CN.md)
+
 ## Local validation
 
 ```bash
 swift build
 swift test
 GLIDEX_VERSION=0.1.0 GLIDEX_BUILD_NUMBER=1 ./scripts/build-app.sh
+GLIDEX_VERSION=0.1.0 GLIDEX_BUILD_NUMBER=1 ./scripts/build-dmg.sh
 codesign --verify --deep --strict --verbose=2 dist/Glidex.app
 ```
 

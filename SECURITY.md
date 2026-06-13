@@ -1,5 +1,7 @@
 # Security and Compatibility
 
+[English](SECURITY.md) | [简体中文](SECURITY.zh-CN.md)
+
 Glidex dynamically loads undocumented Apple frameworks and uses Accessibility
 APIs to identify Simulator display regions. These interfaces can change without
 notice between macOS and Xcode releases.
