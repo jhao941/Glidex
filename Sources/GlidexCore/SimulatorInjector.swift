@@ -98,6 +98,12 @@ public final class SimulatorInjector: @unchecked Sendable {
         return try backend.makeLiveTwoFingerTouchSession(on: simulator, simDevice: simDevice)
     }
 
+    public func makeLiveDirectTouchSession() throws -> LiveDirectTouchSession {
+        let simulator = try selectTarget()
+        let simDevice = try resolver.resolveSimDevice(udid: simulator.udid)
+        return try backend.makeLiveDirectTouchSession(on: simulator, simDevice: simDevice)
+    }
+
     private func selectTarget() throws -> BootedSimulatorRecord {
         try selectTargetRecord()
     }

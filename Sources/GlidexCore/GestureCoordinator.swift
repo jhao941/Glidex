@@ -8,7 +8,7 @@ public final class GestureCoordinator {
 
     private enum DirectTouchState {
         case idle
-        case trackingSingleContact
+        case trackingContacts
         case blockedUntilRelease
     }
 
@@ -247,10 +247,10 @@ public final class GestureCoordinator {
                 directTouchState = .idle
             }
             return
-        case .idle, .trackingSingleContact:
-            if activeContactCount > 1 {
+        case .idle, .trackingContacts:
+            if activeContactCount > 2 {
                 _ = directTouchMapper.cancel()
-                cancelActive(reason: "Direct Touch single-contact limit exceeded")
+                cancelActive(reason: "Direct Touch contact limit exceeded")
                 inputOwner = nil
                 directTouchState = .blockedUntilRelease
                 return
@@ -263,7 +263,7 @@ public final class GestureCoordinator {
             guard let contact = contacts.first else { return }
             cancelActive(reason: "Direct Touch began")
             inputOwner = .rawTouch
-            directTouchState = .trackingSingleContact
+            directTouchState = .trackingContacts
             let transaction = TouchTransaction(
                 source: .rawTrackpad,
                 intent: .directTouch,
@@ -272,7 +272,7 @@ public final class GestureCoordinator {
             )
             activeTransaction = transaction
             transaction.begin(contacts: contacts)
-            logger.info("event=input-diagnostic path=directTouch phase=begin gestureID=\(transaction.gestureID) contacts=1")
+            logger.info("event=input-diagnostic path=directTouch phase=begin gestureID=\(transaction.gestureID) contacts=\(contacts.count)")
             onStateChange?()
         case let .changed(contacts):
             activeTransaction?.update(contacts: contacts)

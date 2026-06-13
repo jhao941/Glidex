@@ -4,6 +4,7 @@ public final class IndigoTouchSink: DeviceAwareTouchSink, @unchecked Sendable {
     private enum ActiveSession {
         case single(LiveTouchSession)
         case twoFinger(LiveTwoFingerTouchSession)
+        case directTouch(LiveDirectTouchSession)
     }
 
     private let injector: SimulatorInjector
@@ -11,6 +12,7 @@ public final class IndigoTouchSink: DeviceAwareTouchSink, @unchecked Sendable {
     private var sessions: [UUID: ActiveSession] = [:]
     private var reusableSingleSession: LiveTouchSession?
     private var reusableTwoFingerSession: LiveTwoFingerTouchSession?
+    private var reusableDirectTouchSession: LiveDirectTouchSession?
     public var onError: (@Sendable (String) -> Void)?
 
     public init(injector: SimulatorInjector, logger: Logger) {
@@ -39,11 +41,14 @@ public final class IndigoTouchSink: DeviceAwareTouchSink, @unchecked Sendable {
                 session.cancel()
             case let .twoFinger(session):
                 session.cancel()
+            case let .directTouch(session):
+                session.cancel()
             }
         }
         sessions.removeAll()
         reusableSingleSession = nil
         reusableTwoFingerSession = nil
+        reusableDirectTouchSession = nil
         logger.info("touch sink prepared for device change")
     }
 
@@ -54,6 +59,18 @@ public final class IndigoTouchSink: DeviceAwareTouchSink, @unchecked Sendable {
         }
 
         do {
+            if snapshot.intent == .directTouch {
+                guard snapshot.contacts.count == 1 || snapshot.contacts.count == 2 else {
+                    logger.warn("touch sink unsupported Direct Touch contact count=\(snapshot.contacts.count) gestureID=\(snapshot.gestureID)")
+                    return
+                }
+                let session = try reusableDirectTouchSession ?? injector.makeLiveDirectTouchSession()
+                session.onError = { [weak self] message in self?.onError?(message) }
+                reusableDirectTouchSession = session
+                sessions[snapshot.gestureID] = .directTouch(session)
+                session.begin(contacts: snapshot.contacts)
+                return
+            }
             switch snapshot.contacts.count {
             case 1:
                 let session = try reusableSingleSession ?? injector.makeLiveTouchSession()
@@ -91,6 +108,8 @@ public final class IndigoTouchSink: DeviceAwareTouchSink, @unchecked Sendable {
                 finger1: snapshot.contacts[0].point.cgPoint,
                 finger2: snapshot.contacts[1].point.cgPoint
             )
+        case let .directTouch(session):
+            session.update(contacts: snapshot.contacts)
         }
     }
 
@@ -111,6 +130,12 @@ public final class IndigoTouchSink: DeviceAwareTouchSink, @unchecked Sendable {
                     finger1: snapshot.contacts.first?.point.cgPoint,
                     finger2: snapshot.contacts.dropFirst().first?.point.cgPoint
                 )
+            }
+        case let .directTouch(session):
+            if cancelled {
+                session.cancel()
+            } else {
+                session.end(contacts: snapshot.contacts)
             }
         }
     }
