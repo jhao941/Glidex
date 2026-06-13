@@ -8,11 +8,15 @@ public enum DirectTouchMapperOutput: Equatable, Sendable {
 }
 
 public struct DirectTouchMapper: Sendable {
-    private let coordinateMapper: CoordinateMapper
+    private var coordinateMapper: CoordinateMapper
     private var activeContacts: [TouchContactPoint] = []
     private var lastFrameNumber: Int32?
 
     public init(coordinateMapper: CoordinateMapper) {
+        self.coordinateMapper = coordinateMapper
+    }
+
+    public mutating func updateCoordinateMapper(_ coordinateMapper: CoordinateMapper) {
         self.coordinateMapper = coordinateMapper
     }
 

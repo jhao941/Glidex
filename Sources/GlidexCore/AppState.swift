@@ -229,9 +229,13 @@ public final class GlidexAppState {
     }
 
     private var observers: [UUID: Observer] = [:]
+    private var previousNonDirectInputMode: CaptureInputMode
 
     public init(snapshot: GlidexAppSnapshot = GlidexAppSnapshot()) {
         self.snapshot = snapshot
+        self.previousNonDirectInputMode = snapshot.preferences.inputMode == .directTouch
+            ? .navigate
+            : snapshot.preferences.inputMode
     }
 
     @discardableResult
@@ -263,10 +267,19 @@ public final class GlidexAppState {
     public func setInputMode(_ mode: CaptureInputMode) {
         var next = snapshot
         next.preferences.inputMode = mode == .disabled ? .navigate : mode
+        if next.preferences.inputMode != .directTouch {
+            previousNonDirectInputMode = next.preferences.inputMode
+        }
         next.anchorLockState = !next.preferences.inputMode.supportsAnchor
             ? .unavailable
             : (next.preferences.prefersAnchorLocked ? .locked : .unlocked)
         commit(next)
+    }
+
+    public func toggleDirectTouchMode() {
+        setInputMode(snapshot.preferences.inputMode == .directTouch
+            ? previousNonDirectInputMode
+            : .directTouch)
     }
 
     public func setAnchorLocked(_ locked: Bool) {

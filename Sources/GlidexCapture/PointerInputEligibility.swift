@@ -24,6 +24,14 @@ enum PointerInputEligibility {
         )
     }
 
+    @MainActor
+    static func isSimulatorVisible(overlay: OverlayWindowController) -> Bool {
+        isEligible(
+            pointer: DesktopPoint(x: overlay.frame.midX, y: overlay.frame.midY),
+            overlay: overlay
+        )
+    }
+
     private static func onScreenWindows() -> [DesktopWindowRecord] {
         guard let entries = CGWindowListCopyWindowInfo(
             [.optionOnScreenOnly, .excludeDesktopElements],

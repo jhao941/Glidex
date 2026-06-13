@@ -37,6 +37,8 @@ final class CaptureSession {
     private var isAttaching = false
     private var globalModifierMonitor: Any?
     private var localModifierMonitor: Any?
+    private var globalShortcutMonitor: Any?
+    private var localShortcutMonitor: Any?
     private var rawInputAdmission: RawInputAdmission = .idle
 
     init(
@@ -442,7 +444,7 @@ final class CaptureSession {
         let activeContactCount = frame.contacts.filter(\.isActive).count
         switch rawInputAdmission {
         case .idle:
-            if activeContactCount >= 2 {
+            if activeContactCount >= state.snapshot.preferences.inputMode.rawInputStartContactCount {
                 rawInputAdmission = allowsNewInputAtPointer() ? .allowed : .blocked
             }
             if rawInputAdmission != .blocked {
@@ -460,6 +462,9 @@ final class CaptureSession {
 
     private func allowsNewInputAtPointer() -> Bool {
         guard state.snapshot.preferences.requiresPointerOverSimulator else { return true }
+        if state.snapshot.preferences.inputMode == .directTouch {
+            return PointerInputEligibility.isSimulatorVisible(overlay: overlay)
+        }
         return PointerInputEligibility.isEligible(
             pointer: DesktopPoint(NSEvent.mouseLocation),
             overlay: overlay
@@ -535,6 +540,19 @@ final class CaptureSession {
                 return event
             }
         }
+        if globalShortcutMonitor == nil {
+            globalShortcutMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard Self.isDirectTouchShortcut(event) else { return }
+                Task { @MainActor [weak self] in self?.state.toggleDirectTouchMode() }
+            }
+        }
+        if localShortcutMonitor == nil {
+            localShortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard Self.isDirectTouchShortcut(event) else { return event }
+                self?.state.toggleDirectTouchMode()
+                return nil
+            }
+        }
     }
 
     private func removeModifierMonitors() {
@@ -546,6 +564,20 @@ final class CaptureSession {
             NSEvent.removeMonitor(localModifierMonitor)
             self.localModifierMonitor = nil
         }
+        if let globalShortcutMonitor {
+            NSEvent.removeMonitor(globalShortcutMonitor)
+            self.globalShortcutMonitor = nil
+        }
+        if let localShortcutMonitor {
+            NSEvent.removeMonitor(localShortcutMonitor)
+            self.localShortcutMonitor = nil
+        }
+    }
+
+    private static func isDirectTouchShortcut(_ event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return event.charactersIgnoringModifiers?.lowercased() == "d" &&
+            modifiers == [.control, .option]
     }
 }
 

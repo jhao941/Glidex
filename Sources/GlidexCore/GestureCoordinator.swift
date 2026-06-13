@@ -6,6 +6,12 @@ public final class GestureCoordinator {
         case rawTouch
     }
 
+    private enum DirectTouchState {
+        case idle
+        case trackingSingleContact
+        case blockedUntilRelease
+    }
+
     private struct RawGestureDiagnostics {
         let gestureID: UUID
         let startedAt: TimeInterval
@@ -24,6 +30,8 @@ public final class GestureCoordinator {
 
     private var mapper: CoordinateMapper
     private var interpreter = GestureInterpreter()
+    private var directTouchMapper: DirectTouchMapper
+    private var directTouchState: DirectTouchState = .idle
     private var activeTransaction: TouchTransaction?
     private var lastMousePoint: SimulatorPoint?
     private var pinchInitialRadius: CGFloat = 72
@@ -46,6 +54,7 @@ public final class GestureCoordinator {
         rawGestureInputProvider: @escaping () -> GestureInputSample = { .none }
     ) {
         self.mapper = mapper
+        self.directTouchMapper = DirectTouchMapper(coordinateMapper: mapper)
         self.sink = sink
         self.logger = logger
         self.rawGestureInputProvider = rawGestureInputProvider
@@ -53,6 +62,7 @@ public final class GestureCoordinator {
 
     public func updateMapper(_ mapper: CoordinateMapper) {
         self.mapper = mapper
+        directTouchMapper.updateCoordinateMapper(mapper)
         if virtualFingerPoint == nil {
             virtualFingerPoint = SimulatorPoint(
                 x: mapper.simulatorSize.width / 2,
@@ -93,7 +103,7 @@ public final class GestureCoordinator {
     }
 
     public func beginMouse(at point: CapturePoint) {
-        guard mode != .disabled else { return }
+        guard mode != .disabled, mode != .directTouch else { return }
         guard inputOwner != .rawTouch else { return }
         inputOwner = .mouse
         if AnchorEditingPolicy.accepts(.down, mode: mode, isLocked: isAnchorLocked) {
@@ -135,6 +145,10 @@ public final class GestureCoordinator {
 
     public func handleRawFrame(_ frame: RawTouchFrame) {
         guard mode != .disabled else { return }
+        if mode == .directTouch {
+            handleDirectTouchFrame(frame)
+            return
+        }
         guard let output = interpreter.consume(frame) else { return }
         switch output {
         case .pending:
@@ -150,6 +164,8 @@ public final class GestureCoordinator {
 
     public func cancelAll(reason: String) {
         _ = interpreter.cancel()
+        _ = directTouchMapper.cancel()
+        directTouchState = .idle
         cancelActive(reason: reason)
         inputOwner = nil
     }
@@ -220,6 +236,57 @@ public final class GestureCoordinator {
             transaction.begin(contacts: pinchContacts(for: gesture, anchor: anchor))
         default:
             break
+        }
+    }
+
+    private func handleDirectTouchFrame(_ frame: RawTouchFrame) {
+        let activeContactCount = frame.contacts.filter(\.isActive).count
+        switch directTouchState {
+        case .blockedUntilRelease:
+            if activeContactCount == 0 {
+                directTouchState = .idle
+            }
+            return
+        case .idle, .trackingSingleContact:
+            if activeContactCount > 1 {
+                _ = directTouchMapper.cancel()
+                cancelActive(reason: "Direct Touch single-contact limit exceeded")
+                inputOwner = nil
+                directTouchState = .blockedUntilRelease
+                return
+            }
+        }
+
+        guard let output = directTouchMapper.consume(frame) else { return }
+        switch output {
+        case let .began(contacts):
+            guard let contact = contacts.first else { return }
+            cancelActive(reason: "Direct Touch began")
+            inputOwner = .rawTouch
+            directTouchState = .trackingSingleContact
+            let transaction = TouchTransaction(
+                source: .rawTrackpad,
+                intent: .directTouch,
+                anchor: contact.point,
+                sink: sink
+            )
+            activeTransaction = transaction
+            transaction.begin(contacts: contacts)
+            logger.info("event=input-diagnostic path=directTouch phase=begin gestureID=\(transaction.gestureID) contacts=1")
+            onStateChange?()
+        case let .changed(contacts):
+            activeTransaction?.update(contacts: contacts)
+        case let .ended(contacts):
+            activeTransaction?.end(contacts: contacts)
+            activeTransaction = nil
+            inputOwner = nil
+            directTouchState = .idle
+            logger.info("event=input-diagnostic path=directTouch phase=end contacts=0")
+            onStateChange?()
+        case .cancelled:
+            cancelActive(reason: "Direct Touch cancelled")
+            inputOwner = nil
+            directTouchState = .idle
         }
     }
 

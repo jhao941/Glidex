@@ -118,6 +118,10 @@ public enum CaptureInputMode: String, Codable, CaseIterable, Equatable, Sendable
     public var supportsAnchor: Bool {
         self == .point || self == .edge
     }
+
+    public var rawInputStartContactCount: Int {
+        self == .directTouch ? 1 : 2
+    }
 }
 
 public struct TouchContactPoint: Equatable, Sendable {

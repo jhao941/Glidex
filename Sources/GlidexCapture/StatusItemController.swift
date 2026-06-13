@@ -61,9 +61,12 @@ final class StatusItemController: NSObject {
         ))
         menu.addItem(submenuItem(
             title: "Mode",
-            values: [CaptureInputMode.navigate, .point, .edge],
+            values: [CaptureInputMode.navigate, .directTouch, .point, .edge],
             selected: snapshot.preferences.inputMode,
-            selector: #selector(selectMode(_:))
+            selector: #selector(selectMode(_:)),
+            itemTitle: { value in
+                value == .directTouch ? "Direct Touch (Experimental)  ⌃⌥D" : value.rawValue.capitalized
+            }
         ))
         if snapshot.preferences.inputMode == .point || snapshot.preferences.inputMode == .edge {
             menu.addItem(actionItem(
@@ -139,13 +142,14 @@ final class StatusItemController: NSObject {
         title: String,
         values: [Value],
         selected: Value,
-        selector: Selector
+        selector: Selector,
+        itemTitle: (Value) -> String = { $0.rawValue.capitalized }
     ) -> NSMenuItem where Value.RawValue == String {
         let parent = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         let submenu = NSMenu()
         for value in values {
             let item = NSMenuItem(
-                title: value.rawValue.capitalized,
+                title: itemTitle(value),
                 action: selector,
                 keyEquivalent: ""
             )

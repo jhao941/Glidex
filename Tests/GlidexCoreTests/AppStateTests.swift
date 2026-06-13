@@ -48,6 +48,36 @@ struct AppStateTests {
         #expect(!state.snapshot.preferences.prefersAnchorLocked)
     }
 
+    @Test("Direct Touch admits raw input from the first contact")
+    func directTouchAdmissionThreshold() {
+        #expect(CaptureInputMode.directTouch.rawInputStartContactCount == 1)
+        #expect(CaptureInputMode.navigate.rawInputStartContactCount == 2)
+        #expect(CaptureInputMode.point.rawInputStartContactCount == 2)
+        #expect(CaptureInputMode.edge.rawInputStartContactCount == 2)
+    }
+
+    @Test("Direct Touch shortcut restores the previous input mode")
+    func directTouchShortcutRestoresPreviousMode() {
+        let state = GlidexAppState()
+        state.setInputMode(.edge)
+
+        state.toggleDirectTouchMode()
+        #expect(state.snapshot.preferences.inputMode == .directTouch)
+
+        state.toggleDirectTouchMode()
+        #expect(state.snapshot.preferences.inputMode == .edge)
+    }
+
+    @Test("Direct Touch restored at launch falls back to Navigate")
+    func restoredDirectTouchShortcutFallsBackToNavigate() {
+        let state = GlidexAppState(snapshot: GlidexAppSnapshot(
+            preferences: GlidexPreferenceValues(inputMode: .directTouch)
+        ))
+
+        state.toggleDirectTouchMode()
+        #expect(state.snapshot.preferences.inputMode == .navigate)
+    }
+
     @Test("errors retain a specific recovery reason")
     func errorState() {
         let state = GlidexAppState()

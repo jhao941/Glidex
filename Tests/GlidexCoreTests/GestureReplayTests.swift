@@ -78,6 +78,52 @@ struct GestureReplayTests {
         #expect(try replay("single-finger-noise").isEmpty)
     }
 
+    @Test("Direct Touch maps one raw contact without gesture interpretation")
+    func directTouchSingleContact() {
+        let sink = ReplayRecordingSink()
+        let coordinator = makeCoordinator(sink: sink)
+        coordinator.setMode(.directTouch)
+
+        coordinator.handleRawFrame(singleRawFrame(1, state: 4, x: 0.25, y: 0.75))
+        coordinator.handleRawFrame(singleRawFrame(2, state: 4, x: 0.5, y: 0.25))
+        coordinator.handleRawFrame(singleRawFrame(3, state: 7, x: 0.5, y: 0.25))
+
+        assertSingleLifecycle(sink.events, expectedIntent: .directTouch, contactCount: 1)
+        #expect(sink.events.first?.snapshot?.contacts.first?.point == SimulatorPoint(x: 100.5, y: 218.5))
+        #expect(sink.events.last?.snapshot?.contacts.first?.point == SimulatorPoint(x: 201, y: 655.5))
+    }
+
+    @Test("Direct Touch ignores AppKit mouse events")
+    func directTouchIgnoresMouse() {
+        let sink = ReplayRecordingSink()
+        let coordinator = makeCoordinator(sink: sink)
+        coordinator.setMode(.directTouch)
+
+        coordinator.beginMouse(at: CapturePoint(x: 120, y: 300))
+        coordinator.updateMouse(at: CapturePoint(x: 140, y: 320))
+        coordinator.endMouse(at: CapturePoint(x: 140, y: 320))
+
+        #expect(sink.events.isEmpty)
+    }
+
+    @Test("a second Direct Touch contact cancels single-contact injection until release")
+    func directTouchBlocksMultipleContacts() {
+        let sink = ReplayRecordingSink()
+        let coordinator = makeCoordinator(sink: sink)
+        coordinator.setMode(.directTouch)
+
+        coordinator.handleRawFrame(singleRawFrame(1, state: 4, x: 0.25, y: 0.75))
+        coordinator.handleRawFrame(rawFrame(2, 0.02, point(0.25, 0.75), point(0.75, 0.25)))
+        coordinator.handleRawFrame(singleRawFrame(3, state: 4, x: 0.3, y: 0.7))
+        coordinator.handleRawFrame(RawTouchFrame(timestamp: 0.04, frame: 4, contacts: []))
+        coordinator.handleRawFrame(singleRawFrame(5, state: 4, x: 0.5, y: 0.5))
+        coordinator.handleRawFrame(singleRawFrame(6, state: 7, x: 0.5, y: 0.5))
+
+        #expect(sink.events.filter(\.isBegin).count == 2)
+        #expect(sink.events.filter(\.isCancel).count == 1)
+        #expect(sink.events.filter(\.isEnd).count == 1)
+    }
+
     @Test("trackpad click remains a mouse tap regardless of AppKit subtype")
     func trackpadClick() {
         let sink = ReplayRecordingSink()
@@ -218,6 +264,27 @@ struct GestureReplayTests {
             contacts: [
                 RawTouchContact(identifier: 1, state: 4, normalizedPosition: first, normalizedVelocity: .zero, size: 1),
                 RawTouchContact(identifier: 2, state: 4, normalizedPosition: second, normalizedVelocity: .zero, size: 1),
+            ]
+        )
+    }
+
+    private func singleRawFrame(
+        _ number: Int32,
+        state: Int32,
+        x: CGFloat,
+        y: CGFloat
+    ) -> RawTouchFrame {
+        RawTouchFrame(
+            timestamp: Double(number) / 100,
+            frame: number,
+            contacts: [
+                RawTouchContact(
+                    identifier: 1,
+                    state: state,
+                    normalizedPosition: point(x, y),
+                    normalizedVelocity: .zero,
+                    size: 1
+                ),
             ]
         )
     }
