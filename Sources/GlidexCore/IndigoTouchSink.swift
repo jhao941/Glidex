@@ -60,7 +60,7 @@ public final class IndigoTouchSink: DeviceAwareTouchSink, @unchecked Sendable {
 
         do {
             if snapshot.intent == .directTouch {
-                guard snapshot.contacts.count == 1 || snapshot.contacts.count == 2 else {
+                guard (1...5).contains(snapshot.contacts.count) else {
                     logger.warn("touch sink unsupported Direct Touch contact count=\(snapshot.contacts.count) gestureID=\(snapshot.gestureID)")
                     return
                 }

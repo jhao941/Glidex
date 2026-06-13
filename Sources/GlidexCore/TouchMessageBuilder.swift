@@ -7,6 +7,18 @@ enum TouchDirection: Int32 {
     case up = 2
 }
 
+enum DirectTouchContactPhase: UInt8, Sendable {
+    case down = 0
+    case move = 1
+    case up = 2
+}
+
+struct DirectTouchContact: Equatable, Sendable {
+    let identifier: UInt32
+    let point: CGPoint
+    let phase: DirectTouchContactPhase
+}
+
 enum TouchMessageBuilder {
     static func singleTouch(point: CGPoint, screenPointSize: CGSize, direction: TouchDirection) throws -> UnsafeMutableRawPointer {
         var messageSize: Int = 0
@@ -33,6 +45,40 @@ enum TouchMessageBuilder {
                 free(UnsafeMutableRawPointer(mutating: errorCString))
             }
             throw GlidexError.commandFailed("failed to create two-finger Indigo message: \(message)")
+        }
+        if let errorCString {
+            free(UnsafeMutableRawPointer(mutating: errorCString))
+        }
+        return message
+    }
+
+    static func directTouch(contacts: [DirectTouchContact], screenPointSize: CGSize) throws -> UnsafeMutableRawPointer {
+        let points = contacts.map(\.point)
+        let identifiers = contacts.map(\.identifier)
+        let phases = contacts.map { $0.phase.rawValue }
+        var messageSize: Int = 0
+        var errorCString: UnsafePointer<CChar>?
+        let message = points.withUnsafeBufferPointer { pointsBuffer in
+            identifiers.withUnsafeBufferPointer { identifiersBuffer in
+                phases.withUnsafeBufferPointer { phasesBuffer in
+                    st_create_indigo_direct_touch_message(
+                        pointsBuffer.baseAddress,
+                        identifiersBuffer.baseAddress,
+                        phasesBuffer.baseAddress,
+                        contacts.count,
+                        screenPointSize,
+                        &messageSize,
+                        &errorCString
+                    )
+                }
+            }
+        }
+        guard let message else {
+            let description = errorCString.map { String(cString: $0) } ?? "unknown Direct Touch builder failure"
+            if let errorCString {
+                free(UnsafeMutableRawPointer(mutating: errorCString))
+            }
+            throw GlidexError.commandFailed("failed to create Direct Touch Indigo message: \(description)")
         }
         if let errorCString {
             free(UnsafeMutableRawPointer(mutating: errorCString))

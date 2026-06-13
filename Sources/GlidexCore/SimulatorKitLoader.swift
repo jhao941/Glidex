@@ -19,6 +19,10 @@ final class SimulatorKitLoader {
         UInt64
     ) -> UnsafeMutableRawPointer?
 
+    typealias IndigoHIDMessageForTrackpadEventFn = @convention(c) (
+        UnsafeRawPointer
+    ) -> UnsafeMutableRawPointer?
+
     typealias IndigoHIDTargetForScreenFn = @convention(c) (AnyObject) -> UInt64
 
     let logger: Logger
@@ -57,7 +61,13 @@ final class SimulatorKitLoader {
             in: loadedFramework,
             as: IndigoHIDMessageForMouseNSEventFn.self
         )
+        let trackpadFactory = try loader.symbol(
+            named: "IndigoHIDMessageForTrackpadEventFromHIDEventRef",
+            in: loadedFramework,
+            as: IndigoHIDMessageForTrackpadEventFn.self
+        )
         st_set_indigo_mouse_factory(unsafeBitCast(mouseFactory, to: UnsafeMutableRawPointer.self))
+        st_set_indigo_trackpad_factory(unsafeBitCast(trackpadFactory, to: UnsafeMutableRawPointer.self))
         framework = loadedFramework
     }
 

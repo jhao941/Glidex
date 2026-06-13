@@ -29,7 +29,10 @@ public final class LiveDirectTouchSession: @unchecked Sendable {
             }
             guard state.supports(contacts) else { return }
             state.currentContacts = state.clamped(contacts)
-            state.send(contacts: state.currentContacts, direction: .down, description: "live Direct Touch begin")
+            state.send(
+                contacts: DirectTouchFramePlanner.begin(state.currentContacts),
+                description: "live Direct Touch begin"
+            )
         }
     }
 
@@ -42,8 +45,11 @@ public final class LiveDirectTouchSession: @unchecked Sendable {
             guard state.supports(contacts) else { return }
             let nextContacts = state.clamped(contacts)
             guard nextContacts != state.currentContacts else { return }
+            let messageFrames = DirectTouchFramePlanner.update(from: state.currentContacts, to: nextContacts)
             state.currentContacts = nextContacts
-            state.send(contacts: nextContacts, direction: .down, description: "live Direct Touch update")
+            for messageContacts in messageFrames {
+                state.send(contacts: messageContacts, description: "live Direct Touch update")
+            }
         }
     }
 
@@ -52,7 +58,13 @@ public final class LiveDirectTouchSession: @unchecked Sendable {
             guard !state.currentContacts.isEmpty else { return }
             let finalContacts = contacts.flatMap { state.supports($0) ? state.clamped($0) : nil }
                 ?? state.currentContacts
-            state.send(contacts: finalContacts, direction: .up, description: "live Direct Touch end")
+            state.send(
+                contacts: DirectTouchFramePlanner.end(
+                    currentContacts: state.currentContacts,
+                    finalContacts: finalContacts
+                ),
+                description: "live Direct Touch end"
+            )
             state.currentContacts = []
         }
     }
@@ -66,7 +78,7 @@ public final class LiveDirectTouchSession: @unchecked Sendable {
     }
 
     private func supports(_ contacts: [TouchContactPoint]) -> Bool {
-        guard contacts.count == 1 || contacts.count == 2 else {
+        guard (1...5).contains(contacts.count) else {
             logger.warn("live Direct Touch unsupported contact count=\(contacts.count)")
             return false
         }
@@ -85,27 +97,10 @@ public final class LiveDirectTouchSession: @unchecked Sendable {
         }
     }
 
-    private func send(contacts: [TouchContactPoint], direction: TouchDirection, description: String) {
+    private func send(contacts: [DirectTouchContact], description: String) {
         do {
-            let message: UnsafeMutableRawPointer
-            switch contacts.count {
-            case 1:
-                message = try TouchMessageBuilder.singleTouch(
-                    point: contacts[0].point.cgPoint,
-                    screenPointSize: metrics.pointSize,
-                    direction: direction
-                )
-            case 2:
-                message = try TouchMessageBuilder.twoFingerTouch(
-                    finger1: contacts[0].point.cgPoint,
-                    finger2: contacts[1].point.cgPoint,
-                    screenPointSize: metrics.pointSize,
-                    direction: direction
-                )
-            default:
-                return
-            }
-            logTouchEventIfEnabled(description: description, direction: direction, contacts: contacts)
+            let message = try TouchMessageBuilder.directTouch(contacts: contacts, screenPointSize: metrics.pointSize)
+            logTouchEventIfEnabled(description: description, contacts: contacts)
             if dumpsHIDMessages {
                 logger.info("message \(TouchMessageBuilder.describe(message))")
             }
@@ -123,11 +118,10 @@ public final class LiveDirectTouchSession: @unchecked Sendable {
 
     private func logTouchEventIfEnabled(
         description: String,
-        direction: TouchDirection,
-        contacts: [TouchContactPoint]
+        contacts: [DirectTouchContact]
     ) {
         guard logsTouchEvents else { return }
-        let points = contacts.map { "\($0.identifier):(\($0.point.x), \($0.point.y))" }.joined(separator: " ")
-        logger.info("\(description) direction=\(direction) contacts=\(points)")
+        let points = contacts.map { "\($0.identifier):\($0.phase)@(\($0.point.x), \($0.point.y))" }.joined(separator: " ")
+        logger.info("\(description) contacts=\(points)")
     }
 }

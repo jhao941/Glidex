@@ -3,6 +3,7 @@
 #import <mach/mach_time.h>
 #import <malloc/malloc.h>
 #import <stddef.h>
+#import <dlfcn.h>
 
 static const unsigned int STButtonEventTypeDown = 0x1;
 static const unsigned int STButtonEventTypeUp = 0x2;
@@ -10,6 +11,18 @@ static const unsigned int STTouchTarget = 0x32;
 static const size_t STIndigoPayloadSize = 0xA0;
 static const size_t STSingleTouchMessageSize = offsetof(IndigoMessage, payload) + (STIndigoPayloadSize * 2);
 static STIndigoMessageForMouseNSEventFunc STMouseFactory = NULL;
+static STIndigoMessageForTrackpadEventFunc STTrackpadFactory = NULL;
+
+typedef const void *STIOHIDEventRef;
+typedef STIOHIDEventRef (*STIOHIDEventCreateDigitizerEventFunc)(
+    CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
+    double, double, double, double, double, bool, bool, uint32_t
+);
+typedef STIOHIDEventRef (*STIOHIDEventCreateDigitizerFingerEventFunc)(
+    CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t,
+    double, double, double, double, double, bool, bool, uint32_t
+);
+typedef void (*STIOHIDEventAppendEventFunc)(STIOHIDEventRef, STIOHIDEventRef, uint32_t);
 
 #pragma mark - IndigoMessageBuilder
 
@@ -23,6 +36,10 @@ static CGPoint st_screenRatioFromPoint(CGPoint point, CGSize screenPointSize) {
 
 void st_set_indigo_mouse_factory(void *function) {
     STMouseFactory = (STIndigoMessageForMouseNSEventFunc)function;
+}
+
+void st_set_indigo_trackpad_factory(void *function) {
+    STTrackpadFactory = (STIndigoMessageForTrackpadEventFunc)function;
 }
 
 static STIndigoMessageForMouseNSEventFunc st_lookup_mouse_factory(const char **errorOut) {
@@ -105,6 +122,94 @@ void *st_create_indigo_two_finger_touch_message(CGPoint finger1, CGPoint finger2
 
     if (messageSizeOut != NULL) {
         *messageSizeOut = malloc_size(message);
+    }
+    return message;
+}
+
+void *st_create_indigo_direct_touch_message(const CGPoint *points, const uint32_t *identifiers, const uint8_t *phases, size_t contactCount, CGSize screenPointSize, size_t *messageSizeOut, const char **errorOut) {
+    if (contactCount < 1 || contactCount > 5 || points == NULL || identifiers == NULL || phases == NULL) {
+        if (errorOut != NULL) {
+            *errorOut = strdup("direct touch requires between one and five contacts");
+        }
+        return NULL;
+    }
+    if (STTrackpadFactory == NULL) {
+        if (errorOut != NULL) {
+            *errorOut = strdup("IndigoHIDMessageForTrackpadEventFromHIDEventRef not configured by the selected SimulatorKit loader");
+        }
+        return NULL;
+    }
+
+    STIOHIDEventCreateDigitizerEventFunc createDigitizer =
+        (STIOHIDEventCreateDigitizerEventFunc)dlsym(RTLD_DEFAULT, "IOHIDEventCreateDigitizerEvent");
+    STIOHIDEventCreateDigitizerFingerEventFunc createFinger =
+        (STIOHIDEventCreateDigitizerFingerEventFunc)dlsym(RTLD_DEFAULT, "IOHIDEventCreateDigitizerFingerEvent");
+    STIOHIDEventAppendEventFunc appendEvent =
+        (STIOHIDEventAppendEventFunc)dlsym(RTLD_DEFAULT, "IOHIDEventAppendEvent");
+    if (createDigitizer == NULL || createFinger == NULL || appendEvent == NULL) {
+        if (errorOut != NULL) {
+            *errorOut = strdup("required IOHID digitizer symbols are unavailable");
+        }
+        return NULL;
+    }
+
+    bool hasActiveContact = false;
+    for (size_t index = 0; index < contactCount; index++) {
+        if (phases[index] != 2) {
+            hasActiveContact = true;
+            break;
+        }
+    }
+    const uint32_t parentMask = hasActiveContact ? 0x07 : 0x06;
+    const CGPoint parentRatio = st_screenRatioFromPoint(points[0], screenPointSize);
+    const uint64_t timestamp = mach_absolute_time();
+    STIOHIDEventRef parent = createDigitizer(
+        kCFAllocatorDefault, timestamp, 2, 0, identifiers[0], parentMask, 0,
+        parentRatio.x, parentRatio.y, 0, 0, 0, hasActiveContact, hasActiveContact, 0
+    );
+    if (parent == NULL) {
+        if (errorOut != NULL) {
+            *errorOut = strdup("failed to create IOHID digitizer parent event");
+        }
+        return NULL;
+    }
+
+    for (size_t index = 0; index < contactCount; index++) {
+        const bool active = phases[index] != 2;
+        const uint32_t mask = active ? 0x07 : 0x06;
+        const CGPoint ratio = st_screenRatioFromPoint(points[index], screenPointSize);
+        STIOHIDEventRef finger = createFinger(
+            kCFAllocatorDefault, timestamp, (uint32_t)index, identifiers[index], mask,
+            ratio.x, ratio.y, 0, 0, 0, active, active, 0
+        );
+        if (finger == NULL) {
+            CFRelease(parent);
+            if (errorOut != NULL) {
+                *errorOut = strdup("failed to create IOHID digitizer finger event");
+            }
+            return NULL;
+        }
+        appendEvent(parent, finger, 0);
+        CFRelease(finger);
+    }
+
+    void *message = STTrackpadFactory(parent);
+    CFRelease(parent);
+    if (message == NULL) {
+        if (errorOut != NULL) {
+            *errorOut = strdup("trackpad factory rejected IOHID digitizer collection");
+        }
+        return NULL;
+    }
+
+    const size_t messageSize = malloc_size(message);
+    char *bytes = (char *)message;
+    for (size_t targetOffset = 0x6C; targetOffset + sizeof(uint32_t) <= messageSize; targetOffset += STIndigoPayloadSize) {
+        const uint32_t target = STTouchTarget;
+        memcpy(bytes + targetOffset, &target, sizeof(target));
+    }
+    if (messageSizeOut != NULL) {
+        *messageSizeOut = messageSize;
     }
     return message;
 }

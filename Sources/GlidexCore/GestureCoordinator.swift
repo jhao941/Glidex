@@ -248,7 +248,7 @@ public final class GestureCoordinator {
             }
             return
         case .idle, .trackingContacts:
-            if activeContactCount > 2 {
+            if activeContactCount > 5 {
                 _ = directTouchMapper.cancel()
                 cancelActive(reason: "Direct Touch contact limit exceeded")
                 inputOwner = nil

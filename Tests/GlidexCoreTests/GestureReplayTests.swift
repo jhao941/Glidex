@@ -106,20 +106,29 @@ struct GestureReplayTests {
         #expect(sink.events.isEmpty)
     }
 
-    @Test("Direct Touch remains one transaction while contacts change from one to two to one")
+    @Test("Direct Touch remains one transaction while contacts grow to five and return to one")
     func directTouchChangesContactCount() {
         let sink = ReplayRecordingSink()
         let coordinator = makeCoordinator(sink: sink)
         coordinator.setMode(.directTouch)
 
         coordinator.handleRawFrame(singleRawFrame(1, state: 4, x: 0.25, y: 0.75))
-        coordinator.handleRawFrame(rawFrame(2, 0.02, point(0.25, 0.75), point(0.75, 0.25)))
+        coordinator.handleRawFrame(RawTouchFrame(timestamp: 0.02, frame: 2, contacts: [
+            rawContact(1, x: 0.2, y: 0.7),
+            rawContact(2, x: 0.35, y: 0.6),
+            rawContact(3, x: 0.5, y: 0.5),
+            rawContact(4, x: 0.65, y: 0.4),
+            rawContact(5, x: 0.8, y: 0.3),
+        ]))
         coordinator.handleRawFrame(RawTouchFrame(
             timestamp: 0.03,
             frame: 3,
             contacts: [
                 RawTouchContact(identifier: 1, state: 4, normalizedPosition: point(0.3, 0.7), normalizedVelocity: .zero, size: 1),
-                RawTouchContact(identifier: 2, state: 7, normalizedPosition: point(0.75, 0.25), normalizedVelocity: .zero, size: 1),
+                RawTouchContact(identifier: 2, state: 7, normalizedPosition: point(0.35, 0.6), normalizedVelocity: .zero, size: 1),
+                RawTouchContact(identifier: 3, state: 7, normalizedPosition: point(0.5, 0.5), normalizedVelocity: .zero, size: 1),
+                RawTouchContact(identifier: 4, state: 7, normalizedPosition: point(0.65, 0.4), normalizedVelocity: .zero, size: 1),
+                RawTouchContact(identifier: 5, state: 7, normalizedPosition: point(0.8, 0.3), normalizedVelocity: .zero, size: 1),
             ]
         ))
         coordinator.handleRawFrame(singleRawFrame(4, state: 7, x: 0.3, y: 0.7))
@@ -128,10 +137,10 @@ struct GestureReplayTests {
         #expect(sink.events.filter(\.isUpdate).count == 2)
         #expect(sink.events.filter(\.isCancel).isEmpty)
         #expect(sink.events.filter(\.isEnd).count == 1)
-        #expect(sink.events.map { $0.snapshot?.contacts.count } == [1, 2, 1, 1])
+        #expect(sink.events.map { $0.snapshot?.contacts.count } == [1, 5, 1, 1])
     }
 
-    @Test("three Direct Touch contacts cancel input until every contact is released")
+    @Test("six Direct Touch contacts cancel input until every contact is released")
     func directTouchBlocksUnsupportedContacts() {
         let sink = ReplayRecordingSink()
         let coordinator = makeCoordinator(sink: sink)
@@ -140,8 +149,11 @@ struct GestureReplayTests {
         coordinator.handleRawFrame(singleRawFrame(1, state: 4, x: 0.25, y: 0.75))
         coordinator.handleRawFrame(RawTouchFrame(timestamp: 0.02, frame: 2, contacts: [
             rawContact(1, x: 0.25, y: 0.75),
-            rawContact(2, x: 0.5, y: 0.5),
-            rawContact(3, x: 0.75, y: 0.25),
+            rawContact(2, x: 0.35, y: 0.65),
+            rawContact(3, x: 0.45, y: 0.55),
+            rawContact(4, x: 0.55, y: 0.45),
+            rawContact(5, x: 0.65, y: 0.35),
+            rawContact(6, x: 0.75, y: 0.25),
         ]))
         coordinator.handleRawFrame(singleRawFrame(3, state: 4, x: 0.3, y: 0.7))
         coordinator.handleRawFrame(RawTouchFrame(timestamp: 0.04, frame: 4, contacts: []))

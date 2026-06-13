@@ -31,8 +31,10 @@ const char *st_copyMethodTypeEncoding(Class cls, const char *selectorName, BOOL 
 STObjCObject st_invokeObjectObjectUnsignedLongLongCatching(STObjCObject target, SEL selector, STObjCObject arg1, unsigned long long arg2, const char **exceptionOut);
 void st_invokeVoidPointerBoolPointerBlockCatching(STObjCObject target, SEL selector, const void *arg1, BOOL arg2, STObjCObject arg3, STObjCObject arg4, const char **exceptionOut);
 void st_set_indigo_mouse_factory(void *function);
+void st_set_indigo_trackpad_factory(void *function);
 void *st_create_indigo_touch_message(CGPoint point, CGSize screenPointSize, int direction, size_t *messageSizeOut, const char **errorOut);
 void *st_create_indigo_two_finger_touch_message(CGPoint finger1, CGPoint finger2, CGSize screenPointSize, int direction, size_t *messageSizeOut, const char **errorOut);
+void *st_create_indigo_direct_touch_message(const CGPoint *points, const uint32_t *identifiers, const uint8_t *phases, size_t contactCount, CGSize screenPointSize, size_t *messageSizeOut, const char **errorOut);
 const char *st_send_hid_message_sync(STObjCObject target, void *message, BOOL freeWhenDone, double timeoutSeconds);
 const char *st_send_hid_message_async(STObjCObject target, void *message, BOOL freeWhenDone, void *context, STHIDSendCompletionFunc completion);
 const char *st_copy_indigo_message_description(void *message);
