@@ -11,6 +11,11 @@ final class StatusItemController: NSObject {
     var onSetRequiresPointerOverSimulator: ((Bool) -> Void)?
     var onSetAnchorLocked: ((Bool) -> Void)?
     var onReattach: (() -> Void)?
+    var onStartRecording: (() -> Void)?
+    var onStopRecording: (() -> Void)?
+    var onReplayLatestRecording: (() -> Void)?
+    var onChooseRecording: (() -> Void)?
+    var onStopReplay: (() -> Void)?
     var onDiagnostics: (() -> Void)?
     var onAbout: (() -> Void)?
     var onQuit: (() -> Void)?
@@ -18,6 +23,7 @@ final class StatusItemController: NSObject {
     private let state: GlidexAppState
     private let statusItem: NSStatusItem
     private var stateObserver: UUID?
+    private var automationState: CaptureAutomationState = .idle(hasRecording: false)
 
     init(state: GlidexAppState) {
         self.state = state
@@ -26,6 +32,12 @@ final class StatusItemController: NSObject {
         stateObserver = state.observe { [weak self] snapshot in
             self?.render(snapshot)
         }
+    }
+
+    func setAutomationState(_ automationState: CaptureAutomationState) {
+        guard self.automationState != automationState else { return }
+        self.automationState = automationState
+        render(state.snapshot)
     }
 
     deinit {
@@ -72,6 +84,7 @@ final class StatusItemController: NSObject {
         ))
         menu.addItem(appearanceMenu(snapshot))
         menu.addItem(inputMenu(snapshot))
+        menu.addItem(automationMenu(snapshot))
         menu.addItem(.separator())
         menu.addItem(actionItem("Reconnect to Simulator", action: #selector(reattach(_:))))
         menu.addItem(actionItem("Diagnostics…", action: #selector(showDiagnostics(_:))))
@@ -122,6 +135,38 @@ final class StatusItemController: NSObject {
         return parent
     }
 
+    private func automationMenu(_ snapshot: GlidexAppSnapshot) -> NSMenuItem {
+        let parent = NSMenuItem(title: "Automation", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        let available = snapshot.preferences.isEnabled && snapshot.status == .active
+        switch automationState {
+        case let .idle(hasRecording):
+            submenu.addItem(actionItem(
+                "Start Recording",
+                action: #selector(startRecording(_:)),
+                isEnabled: available
+            ))
+            submenu.addItem(actionItem(
+                "Replay Last Recording",
+                action: #selector(replayLatestRecording(_:)),
+                isEnabled: available && hasRecording
+            ))
+            submenu.addItem(actionItem(
+                "Replay Recording…",
+                action: #selector(chooseRecording(_:)),
+                isEnabled: available
+            ))
+        case .recording:
+            submenu.addItem(labelItem("Recording…"))
+            submenu.addItem(actionItem("Stop and Save Recording", action: #selector(stopRecording(_:))))
+        case let .replaying(name):
+            submenu.addItem(labelItem("Replaying: \(name)"))
+            submenu.addItem(actionItem("Stop Replay", action: #selector(stopReplay(_:))))
+        }
+        parent.submenu = submenu
+        return parent
+    }
+
     private func statusText(_ status: GlidexRuntimeStatus) -> String {
         switch status {
         case let .waiting(reason): "Waiting — \(reason)"
@@ -141,10 +186,12 @@ final class StatusItemController: NSObject {
     private func actionItem(
         _ title: String,
         action: Selector,
-        state: Bool? = nil
+        state: Bool? = nil,
+        isEnabled: Bool = true
     ) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = self
+        item.isEnabled = isEnabled
         if let state {
             item.state = state ? .on : .off
         }
@@ -208,6 +255,11 @@ final class StatusItemController: NSObject {
     }
 
     @objc private func reattach(_ sender: NSMenuItem) { onReattach?() }
+    @objc private func startRecording(_ sender: NSMenuItem) { onStartRecording?() }
+    @objc private func stopRecording(_ sender: NSMenuItem) { onStopRecording?() }
+    @objc private func replayLatestRecording(_ sender: NSMenuItem) { onReplayLatestRecording?() }
+    @objc private func chooseRecording(_ sender: NSMenuItem) { onChooseRecording?() }
+    @objc private func stopReplay(_ sender: NSMenuItem) { onStopReplay?() }
     @objc private func showDiagnostics(_ sender: NSMenuItem) { onDiagnostics?() }
     @objc private func showAbout(_ sender: NSMenuItem) { onAbout?() }
     @objc private func quit(_ sender: NSMenuItem) { onQuit?() }

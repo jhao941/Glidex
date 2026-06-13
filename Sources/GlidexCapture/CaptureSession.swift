@@ -2,6 +2,36 @@ import AppKit
 import ApplicationServices
 import GlidexCore
 
+enum CaptureAutomationState: Equatable {
+    case idle(hasRecording: Bool)
+    case recording
+    case replaying(String)
+
+    var isIdle: Bool {
+        if case .idle = self { true } else { false }
+    }
+
+    var acceptsLiveInput: Bool {
+        if case .replaying = self { false } else { true }
+    }
+}
+
+enum CaptureAutomationError: LocalizedError {
+    case simulatorUnavailable
+    case automationBusy
+    case notRecording
+    case noRecording
+
+    var errorDescription: String? {
+        switch self {
+        case .simulatorUnavailable: "Glidex must be active and attached to a Simulator."
+        case .automationBusy: "Stop the current recording or replay first."
+        case .notRecording: "No gesture recording is active."
+        case .noRecording: "No saved gesture recording is available."
+        }
+    }
+}
+
 @MainActor
 final class CaptureSession {
     private enum RawInputAdmission: Equatable {
@@ -20,10 +50,14 @@ final class CaptureSession {
     private let observingSink: TouchObservingSink
     private let coordinator: GestureCoordinator
     private let windowTracker: SimulatorWindowTracker
+    private let recorder: GestureRecorder
+    private let replayEngine: GestureReplayEngine
+    private let recordingStore: GestureRecordingStore
 
     private var rawTouchStream: MultitouchSupportRawTouchStream?
     private var rawStreamGeneration = 0
     private var awaitsTouchRelease = false
+    private var physicalActiveContactCount = 0
     private var retryTimer: Timer?
     private var stateObserver: UUID?
     private var selectedTarget: SimulatorTarget?
@@ -40,6 +74,10 @@ final class CaptureSession {
     private var globalShortcutMonitor: Any?
     private var localShortcutMonitor: Any?
     private var rawInputAdmission: RawInputAdmission = .idle
+    private(set) var automationState: CaptureAutomationState {
+        didSet { onAutomationStateChange?(automationState) }
+    }
+    var onAutomationStateChange: ((CaptureAutomationState) -> Void)?
 
     init(
         logger: Logger,
@@ -51,8 +89,11 @@ final class CaptureSession {
         self.overlay = overlay
         self.injector = try SimulatorInjector(logger: logger)
         let sink = IndigoTouchSink(injector: injector, logger: logger)
+        let recorder = GestureRecorder()
         self.sink = sink
+        self.recorder = recorder
         self.observingSink = TouchObservingSink(downstream: sink) { event in
+            recorder.record(event)
             Task { @MainActor in
                 state.setActiveTouches(ActiveTouchIndicatorLifecycle.contacts(for: event))
             }
@@ -65,9 +106,13 @@ final class CaptureSession {
             sink: observingSink,
             logger: logger
         )
+        self.replayEngine = GestureReplayEngine(sink: observingSink)
+        let recordingDirectory = try GestureRecordingStore.defaultDirectoryURL()
+        self.recordingStore = GestureRecordingStore(directoryURL: recordingDirectory)
         self.windowTracker = SimulatorWindowTracker(logger: logger)
         self.lastEnabled = state.snapshot.preferences.isEnabled
         self.lastCalibrationMode = state.snapshot.isCalibrationMode
+        self.automationState = .idle(hasRecording: (try? recordingStore.latest()) != nil)
 
         configureCallbacks()
         stateObserver = state.observe { [weak self] snapshot in
@@ -85,6 +130,88 @@ final class CaptureSession {
         stopActiveInput(reason: "manual reattach")
         state.transition(to: .waiting("Reattaching to Simulator"))
         attemptAttach(promptForAccessibility: true)
+    }
+
+    func startRecording() throws {
+        guard automationState.isIdle else { throw CaptureAutomationError.automationBusy }
+        guard canOperateAutomation, let target = selectedTarget else {
+            throw CaptureAutomationError.simulatorUnavailable
+        }
+        try recorder.start(
+            name: "Recording \(Self.recordingNameFormatter.string(from: Date()))",
+            sourceScreen: target.pointSize
+        )
+        automationState = .recording
+        logger.info("gesture recording started target=\(target.udid) size=\(target.pointSize.width)x\(target.pointSize.height)")
+    }
+
+    @discardableResult
+    func stopRecording() throws -> StoredGestureRecording {
+        guard automationState == .recording,
+              let recording = recorder.stop() else {
+            throw CaptureAutomationError.notRecording
+        }
+        do {
+            let stored = try recordingStore.save(recording)
+            automationState = .idle(hasRecording: true)
+            logger.info("gesture recording saved events=\(recording.events.count) path=\(stored.url.path)")
+            return stored
+        } catch {
+            automationState = .idle(hasRecording: hasStoredRecording)
+            throw error
+        }
+    }
+
+    func replayLatestRecording() throws {
+        guard automationState.isIdle else { throw CaptureAutomationError.automationBusy }
+        guard canOperateAutomation, selectedTarget != nil else {
+            throw CaptureAutomationError.simulatorUnavailable
+        }
+        guard let stored = try recordingStore.latest() else {
+            throw CaptureAutomationError.noRecording
+        }
+
+        try replay(stored)
+    }
+
+    func replayRecording(at url: URL) throws {
+        guard automationState.isIdle else { throw CaptureAutomationError.automationBusy }
+        guard canOperateAutomation else { throw CaptureAutomationError.simulatorUnavailable }
+        try replay(recordingStore.load(from: url))
+    }
+
+    func prepareRecordingsDirectory() throws -> URL {
+        try recordingStore.prepareDirectory()
+        return recordingStore.directoryURL
+    }
+
+    private func replay(_ stored: StoredGestureRecording) throws {
+        guard let target = selectedTarget else {
+            throw CaptureAutomationError.simulatorUnavailable
+        }
+
+        coordinator.cancelAll(reason: "gesture replay started")
+        state.setOptionAnchorAvailability(.inactive)
+        state.clearIndicators()
+        rawInputAdmission = .blocked
+        automationState = .replaying(stored.recording.name)
+        do {
+            try replayEngine.play(
+                stored.recording,
+                targetScreen: target.pointSize
+            ) { [weak self] outcome in
+                self?.finishReplay(outcome)
+            }
+            logger.info("gesture replay started name=\(stored.recording.name) events=\(stored.recording.events.count)")
+        } catch {
+            rawInputAdmission = .idle
+            automationState = .idle(hasRecording: true)
+            throw error
+        }
+    }
+
+    func stopReplay() {
+        replayEngine.stop()
     }
 
     func diagnostics() -> CaptureDiagnostics {
@@ -266,8 +393,9 @@ final class CaptureSession {
         let stream = MultitouchSupportRawTouchStream(logger: logger) { [weak self] frame in
             DispatchQueue.main.async {
                 guard let self,
-                      self.rawStreamGeneration == generation,
-                      self.canInjectInput else { return }
+                      self.rawStreamGeneration == generation else { return }
+                self.physicalActiveContactCount = frame.contacts.filter(\.isActive).count
+                guard self.canInjectInput else { return }
                 if self.awaitsTouchRelease {
                     if frame.contacts.isEmpty { self.awaitsTouchRelease = false }
                     return
@@ -279,6 +407,7 @@ final class CaptureSession {
             try stream.start(source: .default, mode: 0)
             rawTouchStream = stream
             awaitsTouchRelease = false
+            physicalActiveContactCount = 0
             return true
         } catch {
             fail(.multitouchUnavailable(String(describing: error)), retry: true)
@@ -419,6 +548,9 @@ final class CaptureSession {
     }
 
     private func stopActiveInput(reason: String) {
+        replayEngine.stop()
+        recorder.discard()
+        automationState = .idle(hasRecording: hasStoredRecording)
         coordinator.cancelAll(reason: reason)
         state.setOptionAnchorAvailability(.inactive)
         state.clearIndicators()
@@ -426,6 +558,7 @@ final class CaptureSession {
         rawTouchStream = nil
         rawStreamGeneration += 1
         awaitsTouchRelease = false
+        physicalActiveContactCount = 0
         rawInputAdmission = .idle
         windowTracker.stop()
     }
@@ -442,9 +575,33 @@ final class CaptureSession {
     }
 
     private var canInjectInput: Bool {
+        automationState.acceptsLiveInput &&
+            canOperateAutomation
+    }
+
+    private var canOperateAutomation: Bool {
         state.snapshot.preferences.isEnabled &&
             state.snapshot.status == .active &&
             !state.snapshot.isCalibrationMode
+    }
+
+    private var hasStoredRecording: Bool {
+        (try? recordingStore.latest()) != nil
+    }
+
+    private func finishReplay(_ outcome: GestureReplayOutcome) {
+        guard case .replaying = automationState else { return }
+        rawInputAdmission = .idle
+        awaitsTouchRelease = physicalActiveContactCount > 0
+        automationState = .idle(hasRecording: hasStoredRecording)
+        switch outcome {
+        case .completed:
+            logger.info("gesture replay completed")
+        case .stopped:
+            logger.info("gesture replay stopped")
+        case let .failed(message):
+            logger.error("gesture replay failed: \(message)")
+        }
     }
 
     private var isOptionPressed: Bool {
@@ -590,6 +747,13 @@ final class CaptureSession {
         return event.charactersIgnoringModifiers?.lowercased() == "d" &&
             modifiers == [.control, .option]
     }
+
+    private static let recordingNameFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter
+    }()
 }
 
 private extension CGRect {

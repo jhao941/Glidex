@@ -1,5 +1,6 @@
 import AppKit
 import GlidexCore
+import UniformTypeIdentifiers
 
 @MainActor
 final class AppController: NSObject, NSApplicationDelegate {
@@ -82,6 +83,27 @@ final class AppController: NSObject, NSApplicationDelegate {
         statusItemController.onReattach = { [weak self] in
             self?.captureSession?.reattach()
         }
+        captureSession?.onAutomationStateChange = { [weak statusItemController] automationState in
+            statusItemController?.setAutomationState(automationState)
+        }
+        if let captureSession {
+            statusItemController.setAutomationState(captureSession.automationState)
+        }
+        statusItemController.onStartRecording = { [weak self] in
+            self?.performAutomationCommand { try self?.captureSession?.startRecording() }
+        }
+        statusItemController.onStopRecording = { [weak self] in
+            self?.performAutomationCommand { _ = try self?.captureSession?.stopRecording() }
+        }
+        statusItemController.onReplayLatestRecording = { [weak self] in
+            self?.performAutomationCommand { try self?.captureSession?.replayLatestRecording() }
+        }
+        statusItemController.onChooseRecording = { [weak self] in
+            self?.chooseRecordingForReplay()
+        }
+        statusItemController.onStopReplay = { [weak self] in
+            self?.captureSession?.stopReplay()
+        }
         statusItemController.onDiagnostics = { [weak self] in
             guard let self else { return }
             diagnosticsWindowController.show(
@@ -157,6 +179,44 @@ final class AppController: NSObject, NSApplicationDelegate {
             "outside"
         case let .available(point):
             "available(\(Int(point.x)),\(Int(point.y)))"
+        }
+    }
+
+    private func performAutomationCommand(_ command: () throws -> Void) {
+        do {
+            try command()
+        } catch {
+            logger.error("automation command failed: \(error)")
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Glidex Automation"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+        }
+    }
+
+    private func chooseRecordingForReplay() {
+        guard let captureSession else { return }
+        let directoryURL: URL
+        do {
+            directoryURL = try captureSession.prepareRecordingsDirectory()
+        } catch {
+            performAutomationCommand { throw error }
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.title = "Replay Gesture Recording"
+        panel.prompt = "Replay"
+        panel.message = "Choose a Glidex gesture recording."
+        panel.directoryURL = directoryURL
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        performAutomationCommand {
+            try captureSession.replayRecording(at: url)
         }
     }
 }
