@@ -19,6 +19,8 @@ struct CLI {
         let injector = try SimulatorInjector(logger: logger)
 
         switch command {
+        case "help", "--help", "-h":
+            print(Self.usage)
         case "list":
             let devices = try injector.listBootedSimulators()
             DevicePrinter.printDevices(devices, logger: logger)
@@ -59,8 +61,52 @@ struct CLI {
                 throw GlidexError.usage("expected --source to be list, default, or both")
             }
             try injector.multitouchProbe(duration: duration, mode: mode, source: source)
+        case "recordings":
+            try await runRecordingsCommand(injector: injector)
         default:
             throw GlidexError.usage("unknown command '\(command)'\n\n\(Self.usage)")
+        }
+    }
+
+    private func runRecordingsCommand(injector: SimulatorInjector) async throws {
+        guard arguments.count >= 3 else {
+            throw GlidexError.usage("missing recordings subcommand\n\n\(Self.usage)")
+        }
+        let parser = ArgumentCursor(Array(arguments.dropFirst(3)))
+        let directory = try parser.optionalString(for: "--directory")
+            .map { URL(fileURLWithPath: NSString(string: $0).expandingTildeInPath, isDirectory: true) }
+            ?? GestureRecordingStore.defaultDirectoryURL()
+        let store = GestureRecordingStore(directoryURL: directory)
+
+        switch arguments[2] {
+        case "list":
+            let recordings = try store.recordings()
+            if recordings.isEmpty {
+                print("No recordings in \(directory.path)")
+                return
+            }
+            for stored in recordings {
+                let duration = stored.recording.events.last?.time ?? 0
+                print("\(stored.url.path)\t\(stored.recording.events.count) events\t\(String(format: "%.3fs", duration))")
+            }
+        case "replay":
+            let file = try parser.string(for: "--file")
+            let url = URL(fileURLWithPath: NSString(string: file).expandingTildeInPath)
+            let playbackRate = try parser.double(for: "--rate", defaultValue: 1)
+            if let udid = try parser.optionalString(for: "--udid") {
+                _ = try injector.selectTarget(udid: udid)
+            }
+            let target = try injector.selectedTarget()
+            let stored = try store.load(from: url)
+            let sink = IndigoTouchSink(injector: injector, logger: logger)
+            try await CLIReplaySession.replay(
+                stored.recording,
+                target: target,
+                sink: sink,
+                playbackRate: playbackRate
+            )
+        default:
+            throw GlidexError.usage("unknown recordings subcommand '\(arguments[2])'\n\n\(Self.usage)")
         }
     }
 
@@ -99,6 +145,8 @@ struct CLI {
       glidex drag --from 120,300 --to 120,700 --duration 0.5
       glidex live-drag --from 120,300 --to 120,700 --duration 0.5
       glidex pinch --center 200,400 --scale 1.2 --duration 0.5
+      glidex recordings list [--directory "~/Library/Application Support/Glidex/Recordings"]
+      glidex recordings replay --file recording.json [--udid DEVICE_UDID] [--rate 1.0]
     """
 }
 
@@ -117,7 +165,10 @@ struct ArgumentCursor {
     }
 
     func double(for flag: String, defaultValue: Double? = nil) throws -> Double {
-        if let index = args.firstIndex(of: flag), index + 1 < args.count, let value = Double(args[index + 1]) {
+        if let index = args.firstIndex(of: flag) {
+            guard index + 1 < args.count, let value = Double(args[index + 1]) else {
+                throw GlidexError.usage("expected numeric value for \(flag)")
+            }
             return value
         }
         if let defaultValue {
@@ -127,7 +178,10 @@ struct ArgumentCursor {
     }
 
     func int(for flag: String, defaultValue: Int? = nil) throws -> Int {
-        if let index = args.firstIndex(of: flag), index + 1 < args.count, let value = Int(args[index + 1]) {
+        if let index = args.firstIndex(of: flag) {
+            guard index + 1 < args.count, let value = Int(args[index + 1]) else {
+                throw GlidexError.usage("expected integer value for \(flag)")
+            }
             return value
         }
         if let defaultValue {
@@ -146,6 +200,14 @@ struct ArgumentCursor {
         throw GlidexError.usage("missing value for \(flag)")
     }
 
+    func optionalString(for flag: String) throws -> String? {
+        guard let index = args.firstIndex(of: flag) else { return nil }
+        guard index + 1 < args.count else {
+            throw GlidexError.usage("missing value for \(flag)")
+        }
+        return args[index + 1]
+    }
+
     func point(for flag: String) throws -> CGPoint {
         let raw = try value(for: flag)
         let parts = raw.split(separator: ",", omittingEmptySubsequences: false)
@@ -153,5 +215,61 @@ struct ArgumentCursor {
             throw GlidexError.usage("expected \(flag) in x,y form")
         }
         return CGPoint(x: x, y: y)
+    }
+}
+
+@MainActor
+private final class CLIReplaySession {
+    private let engine: GestureReplayEngine
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var finished = false
+
+    private init(sink: IndigoTouchSink) {
+        self.engine = GestureReplayEngine(sink: sink)
+        sink.onError = { [weak self] message in
+            Task { @MainActor [weak self] in
+                self?.finish(.failure(GlidexError.commandFailed(message)))
+            }
+        }
+    }
+
+    static func replay(
+        _ recording: GestureRecording,
+        target: SimulatorTarget,
+        sink: IndigoTouchSink,
+        playbackRate: Double
+    ) async throws {
+        let session = CLIReplaySession(sink: sink)
+        try await withCheckedThrowingContinuation { continuation in
+            session.continuation = continuation
+            do {
+                try session.engine.play(
+                    recording,
+                    targetScreen: target.pointSize,
+                    playbackRate: playbackRate
+                ) { outcome in
+                    switch outcome {
+                    case .completed:
+                        session.finish(.success(()))
+                    case .stopped:
+                        session.finish(.failure(GlidexError.commandFailed("gesture replay stopped")))
+                    case let .failed(message):
+                        session.finish(.failure(GlidexError.commandFailed(message)))
+                    }
+                }
+            } catch {
+                session.finish(.failure(error))
+            }
+        }
+    }
+
+    private func finish(_ result: Result<Void, Error>) {
+        guard !finished else { return }
+        finished = true
+        if case .failure = result {
+            engine.stop()
+        }
+        continuation?.resume(with: result)
+        continuation = nil
     }
 }
