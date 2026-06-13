@@ -95,12 +95,12 @@ public struct SimulatorPointSize: Equatable, Sendable {
     }
 }
 
-public enum TouchSource: String, Equatable, Sendable {
+public enum TouchSource: String, Codable, Equatable, Sendable {
     case mouse
     case rawTrackpad
 }
 
-public enum GestureIntent: String, Equatable, Sendable {
+public enum GestureIntent: String, Codable, Equatable, Sendable {
     case point
     case navigate
     case edge
