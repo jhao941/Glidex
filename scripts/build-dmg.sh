@@ -14,20 +14,12 @@ mkdir -p "$STAGING"
 cp -R "$DIST/Glidex.app" "$STAGING/Glidex.app"
 ln -s /Applications "$STAGING/Applications"
 
-if diskutil image create from --help >/dev/null 2>&1; then
-    diskutil image create from \
-        --volumeName "Glidex" \
-        --format UDZO \
-        "$STAGING" \
-        "$DMG"
-else
-    hdiutil create \
-        -volname "Glidex" \
-        -srcfolder "$STAGING" \
-        -ov \
-        -format UDZO \
-        "$DMG"
-fi
+hdiutil create \
+    -volname "Glidex" \
+    -srcfolder "$STAGING" \
+    -ov \
+    -format UDZO \
+    "$DMG"
 
 rm -rf "$STAGING"
 echo "Built $DMG"
