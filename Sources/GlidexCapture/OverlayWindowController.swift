@@ -144,8 +144,8 @@ final class OverlayWindowController {
             guard let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey]
                     as? NSRunningApplication else { return }
             Task { @MainActor [weak self] in
-                guard let self, application.processIdentifier == hostOwnerPID else { return }
-                orderRelativeToHost()
+                guard let self, application.processIdentifier == self.hostOwnerPID else { return }
+                self.orderRelativeToHost()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
                     self?.orderRelativeToHost()
                 }
