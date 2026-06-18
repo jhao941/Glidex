@@ -3,7 +3,7 @@ import CGlidexShim
 import Dispatch
 import Foundation
 
-final class IndigoHIDBackend {
+final class IndigoHIDBackend: @unchecked Sendable {
     private struct DeviceUnitPoint {
         var x: CGFloat
         var y: CGFloat
@@ -18,6 +18,10 @@ final class IndigoHIDBackend {
         var padding1: UInt32
         var type: UInt64
         var edge: UInt64
+    }
+
+    private struct MainActorObject: @unchecked Sendable {
+        var value: AnyObject
     }
 
     private enum TouchPhase: UInt8 {
@@ -148,6 +152,24 @@ final class IndigoHIDBackend {
     }
 
     private func makeDigitizerView(simDevice: AnyObject, metrics: ScreenMetrics) throws -> AnyObject {
+        let simDevice = MainActorObject(value: simDevice)
+        return try syncOnMainActor {
+            MainActorObject(value: try makeDigitizerViewOnMainActor(simDevice: simDevice.value, metrics: metrics))
+        }.value
+    }
+
+    private func syncOnMainActor<T: Sendable>(_ body: @MainActor () throws -> T) throws -> T {
+        if Thread.isMainThread {
+            return try MainActor.assumeIsolated(body)
+        }
+
+        return try DispatchQueue.main.sync {
+            try MainActor.assumeIsolated(body)
+        }
+    }
+
+    @MainActor
+    private func makeDigitizerViewOnMainActor(simDevice: AnyObject, metrics: ScreenMetrics) throws -> AnyObject {
         try simulatorKit.load()
         let frame = CGRect(origin: .zero, size: metrics.pointSize)
 
@@ -173,6 +195,7 @@ final class IndigoHIDBackend {
         return digitizerView
     }
 
+    @MainActor
     private func connectDisplayViewIfPossible(_ displayView: NSView, simDevice: AnyObject) throws {
         guard ProcessInfo.processInfo.environment["GLIDEX_ENABLE_DISPLAY_CONNECT"] == "1" else {
             logger.info("skipping SimDisplayView.connect probe; set GLIDEX_ENABLE_DISPLAY_CONNECT=1 to try the experimental SwiftCC connect trampoline")
@@ -199,6 +222,7 @@ final class IndigoHIDBackend {
         )
     }
 
+    @MainActor
     private func makeSimDeviceScreen(simDevice: AnyObject, screenID: UInt64) -> AnyObject? {
         guard let screenClass = simulatorKit.loader.classNamed("SimulatorKit.SimDeviceScreen"),
               let allocated = ObjCInvoker.object(screenClass as AnyObject, NSSelectorFromString("alloc")) else {
@@ -212,6 +236,7 @@ final class IndigoHIDBackend {
         )
     }
 
+    @MainActor
     private func allocateAndInitFrame(classObject: AnyClass, frame: CGRect) -> AnyObject? {
         guard let allocated = ObjCInvoker.object(classObject as AnyObject, NSSelectorFromString("alloc")) else {
             return nil
@@ -219,6 +244,7 @@ final class IndigoHIDBackend {
         return ObjCInvoker.objectCGRect(allocated, NSSelectorFromString("initWithFrame:"), rect: frame)
     }
 
+    @MainActor
     private func firstSubview(in root: NSView, matchingClassName needle: String) -> AnyObject? {
         if NSStringFromClass(type(of: root)).contains(needle) {
             return root
@@ -231,6 +257,7 @@ final class IndigoHIDBackend {
         return nil
     }
 
+    @MainActor
     private func logViewHierarchy(_ root: NSView, depth: Int = 0) {
         let indent = String(repeating: "  ", count: depth)
         logger.info("view_hierarchy \(indent)\(NSStringFromClass(type(of: root))) frame=\(root.frame)")

@@ -33,13 +33,16 @@ final class BootedSimulatorResolver {
         let sharedSelector = loader.selector(named: "sharedServiceContextForDeveloperDir:error:")
         logTypeEncoding(simServiceContextClass, selector: "sharedServiceContextForDeveloperDir:error:", isClassMethod: true)
         let developerDir = developerDirectory as NSString
-        var contextErrorObject: AnyObject?
-        guard let context = ObjCInvoker.classObjectPointer(
-            simServiceContextClass,
-            sharedSelector,
-            object: developerDir,
-            pointer: &contextErrorObject
-        ) else {
+        let contextResult = ObjCInvoker.withOutObject { errorPointer in
+            ObjCInvoker.classObjectPointer(
+                simServiceContextClass,
+                sharedSelector,
+                object: developerDir,
+                pointer: errorPointer
+            )
+        }
+        guard let context = contextResult.result else {
+            let contextErrorObject = contextResult.object
             let contextError = contextErrorObject as? NSError
             throw GlidexError.commandFailed("failed to acquire SimServiceContext: \(contextError?.localizedDescription ?? "nil")")
         }
@@ -47,8 +50,11 @@ final class BootedSimulatorResolver {
 
         let defaultSetSelector = loader.selector(named: "defaultDeviceSetWithError:")
         logTypeEncoding(simServiceContextClass, selector: "defaultDeviceSetWithError:")
-        var deviceSetErrorObject: AnyObject?
-        guard let deviceSet = ObjCInvoker.object(context, defaultSetSelector, pointer: &deviceSetErrorObject) else {
+        let deviceSetResult = ObjCInvoker.withOutObject { errorPointer in
+            ObjCInvoker.object(context, defaultSetSelector, pointer: errorPointer)
+        }
+        guard let deviceSet = deviceSetResult.result else {
+            let deviceSetErrorObject = deviceSetResult.object
             let deviceSetError = deviceSetErrorObject as? NSError
             throw GlidexError.commandFailed("failed to acquire default SimDeviceSet: \(deviceSetError?.localizedDescription ?? "nil")")
         }

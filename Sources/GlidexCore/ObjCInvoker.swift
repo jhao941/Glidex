@@ -7,6 +7,14 @@ enum ObjCInvoker {
         case failure(String)
     }
 
+    static func withOutObject<T>(_ body: (UnsafeMutableRawPointer) -> T) -> (result: T, object: AnyObject?) {
+        var rawObject: Unmanaged<AnyObject>?
+        let result = withUnsafeMutablePointer(to: &rawObject) { pointer in
+            body(UnsafeMutableRawPointer(pointer))
+        }
+        return (result, rawObject?.takeUnretainedValue())
+    }
+
     private static func base() -> UnsafeMutableRawPointer {
         UnsafeMutableRawPointer(st_objc_msgSend())
     }

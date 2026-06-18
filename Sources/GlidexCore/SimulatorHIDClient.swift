@@ -104,25 +104,31 @@ final class SimulatorHIDClient {
                 logger.info("type_encoding \(NSStringFromClass(type(of: allocated))) initWithDevice:sessionResetQueue:error:sessionResetHandler: = \(encoding)")
             }
             let queue = DispatchQueue(label: "glidex.hid.session-reset")
-            var errorObject: AnyObject?
-            if let client = ObjCInvoker.object(
-                allocated,
-                sessionSelector,
-                object: simDevice,
-                object: queue as AnyObject,
-                pointer: &errorObject,
-                object: nil
-            ) {
+            let clientResult = ObjCInvoker.withOutObject { errorPointer in
+                ObjCInvoker.object(
+                    allocated,
+                    sessionSelector,
+                    object: simDevice,
+                    object: queue as AnyObject,
+                    pointer: errorPointer,
+                    object: nil
+                )
+            }
+            if let client = clientResult.result {
                 logger.info("created HID client via initWithDevice:sessionResetQueue:error:sessionResetHandler:")
                 return client
             }
+            let errorObject = clientResult.object
             let error = errorObject as? NSError
             logger.warn("initWithDevice:sessionResetQueue:error:sessionResetHandler: failed: \(error?.localizedDescription ?? "nil"); falling back")
         }
 
         let initSelector = NSSelectorFromString("initWithDevice:error:")
-        var errorObject: AnyObject?
-        guard let client = ObjCInvoker.object(allocated, initSelector, object: simDevice, pointer: &errorObject) else {
+        let clientResult = ObjCInvoker.withOutObject { errorPointer in
+            ObjCInvoker.object(allocated, initSelector, object: simDevice, pointer: errorPointer)
+        }
+        guard let client = clientResult.result else {
+            let errorObject = clientResult.object
             let error = errorObject as? NSError
             throw GlidexError.commandFailed("initWithDevice:error: failed: \(error?.localizedDescription ?? "nil")")
         }
