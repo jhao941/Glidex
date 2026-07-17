@@ -16,7 +16,7 @@ mkdir -p "$STAGING"
 cp -R "$DIST/Glidex.app" "$STAGING/Glidex.app"
 ln -s /Applications "$STAGING/Applications"
 
-if diskutil image create from -h >/dev/null 2>&1; then
+if diskutil image create from --help 2>&1 | grep -q -- '--volumeName'; then
     diskutil image create from \
         --volumeName "Glidex" \
         --format UDZO \
