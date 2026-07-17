@@ -25,6 +25,8 @@ ditto -c -k --keepParent "$DIST/Glidex.app" "$APP_ZIP"
 
 GLIDEX_SKIP_APP_BUILD=1 "$ROOT/scripts/build-dmg.sh"
 DMG="$DIST/Glidex-$VERSION.dmg"
+codesign --force --timestamp --sign "$GLIDEX_SIGN_IDENTITY" "$DMG"
+codesign --verify --verbose=2 "$DMG"
 "$ROOT/scripts/notarize-artifact.sh" "$DMG"
 
 codesign --verify --deep --strict --verbose=2 "$DIST/Glidex.app"
