@@ -21,7 +21,7 @@ struct SimctlListResponse: Decodable {
     let devices: [String: [SimulatorDevice]]
 }
 
-public struct BootedSimulatorRecord: Sendable {
+public struct BootedSimulatorRecord: Equatable, Sendable {
     public let name: String
     public let udid: String
     public let runtime: String

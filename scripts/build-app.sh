@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="${GLIDEX_VERSION:-0.1.0}"
-BUILD_NUMBER="${GLIDEX_BUILD_NUMBER:-1}"
+VERSION="${GLIDEX_VERSION:-$(tr -d '[:space:]' < "$ROOT/VERSION")}"
+BUILD_NUMBER="${GLIDEX_BUILD_NUMBER:-$(tr -d '[:space:]' < "$ROOT/BUILD_NUMBER")}"
 DIST="${GLIDEX_DIST_DIR:-$ROOT/dist}"
 APP="$DIST/Glidex.app"
 CONTENTS="$APP/Contents"
@@ -19,6 +19,7 @@ rm -rf "$APP"
 mkdir -p "$MACOS" "$RESOURCES"
 cp ".build/release/glidex-capture" "$MACOS/Glidex"
 cp ".build/release/glidex" "$DIST/glidex"
+cp -R "$ROOT/Resources/Localization/"*.lproj "$RESOURCES/"
 
 # Xcode 26 compiles Icon Composer projects into both Liquid Glass assets and
 # a compatibility ICNS. Older actool versions fall back to the committed ICNS.
@@ -38,6 +39,11 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 <dict>
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>en</string>
+        <string>zh-Hans</string>
+    </array>
     <key>CFBundleExecutable</key>
     <string>Glidex</string>
     <key>CFBundleIdentifier</key>
@@ -70,11 +76,17 @@ plutil -lint "$CONTENTS/Info.plist"
 
 SIGN_IDENTITY="${GLIDEX_SIGN_IDENTITY:--}"
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
+    if [[ "${GLIDEX_REQUIRE_SIGNING:-0}" == "1" ]]; then
+        echo "GLIDEX_SIGN_IDENTITY must name a Developer ID Application certificate" >&2
+        exit 1
+    fi
     codesign --force --deep --sign - "$APP"
 else
-    codesign --force --deep --options runtime --timestamp \
-        --sign "$SIGN_IDENTITY" "$APP"
+    codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$MACOS/Glidex"
+    codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP"
 fi
+
+codesign --verify --deep --strict --verbose=2 "$APP"
 
 echo "Built $APP"
 echo "Built $DIST/glidex"

@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-public enum SimulatorDisplayHostKind: String, Equatable, Sendable {
+public enum SimulatorDisplayHostKind: String, Codable, Equatable, Hashable, Sendable {
     case legacySimulator
     case deviceHub
 

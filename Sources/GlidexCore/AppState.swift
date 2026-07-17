@@ -60,6 +60,11 @@ public enum BorderVisibility: String, Codable, CaseIterable, Equatable, Sendable
     }
 }
 
+public enum SimulatorTargetingMode: String, Codable, CaseIterable, Equatable, Sendable {
+    case followFocus
+    case pinned
+}
+
 public enum OptionAnchorAvailability: Equatable, Sendable {
     case inactive
     case outsideSimulator
@@ -94,6 +99,8 @@ public struct GlidexPreferenceValues: Codable, Equatable, Sendable {
     public var showsActiveTouches: Bool
     public var prefersAnchorLocked: Bool
     public var requiresPointerOverSimulator: Bool
+    public var simulatorTargetingMode: SimulatorTargetingMode
+    public var pinnedSimulatorUDID: String?
 
     public init(
         isEnabled: Bool = true,
@@ -102,7 +109,9 @@ public struct GlidexPreferenceValues: Codable, Equatable, Sendable {
         showsAnchorIndicator: Bool = true,
         showsActiveTouches: Bool = true,
         prefersAnchorLocked: Bool = false,
-        requiresPointerOverSimulator: Bool = true
+        requiresPointerOverSimulator: Bool = true,
+        simulatorTargetingMode: SimulatorTargetingMode = .followFocus,
+        pinnedSimulatorUDID: String? = nil
     ) {
         self.isEnabled = isEnabled
         self.inputMode = inputMode == .disabled ? .navigate : inputMode
@@ -111,6 +120,11 @@ public struct GlidexPreferenceValues: Codable, Equatable, Sendable {
         self.showsActiveTouches = showsActiveTouches
         self.prefersAnchorLocked = prefersAnchorLocked
         self.requiresPointerOverSimulator = requiresPointerOverSimulator
+        let normalizedPinnedUDID = pinnedSimulatorUDID?.isEmpty == false ? pinnedSimulatorUDID : nil
+        self.simulatorTargetingMode = simulatorTargetingMode == .pinned && normalizedPinnedUDID == nil
+            ? .followFocus
+            : simulatorTargetingMode
+        self.pinnedSimulatorUDID = normalizedPinnedUDID
     }
 
     public init(
@@ -141,6 +155,8 @@ public struct GlidexPreferenceValues: Codable, Equatable, Sendable {
         case showsActiveTouches
         case prefersAnchorLocked
         case requiresPointerOverSimulator
+        case simulatorTargetingMode
+        case pinnedSimulatorUDID
     }
 
     public init(from decoder: Decoder) throws {
@@ -153,7 +169,9 @@ public struct GlidexPreferenceValues: Codable, Equatable, Sendable {
             showsAnchorIndicator: try values.decodeIfPresent(Bool.self, forKey: .showsAnchorIndicator) ?? legacyIndicator ?? true,
             showsActiveTouches: try values.decodeIfPresent(Bool.self, forKey: .showsActiveTouches) ?? legacyIndicator ?? true,
             prefersAnchorLocked: try values.decodeIfPresent(Bool.self, forKey: .prefersAnchorLocked) ?? false,
-            requiresPointerOverSimulator: try values.decodeIfPresent(Bool.self, forKey: .requiresPointerOverSimulator) ?? true
+            requiresPointerOverSimulator: try values.decodeIfPresent(Bool.self, forKey: .requiresPointerOverSimulator) ?? true,
+            simulatorTargetingMode: try values.decodeIfPresent(SimulatorTargetingMode.self, forKey: .simulatorTargetingMode) ?? .followFocus,
+            pinnedSimulatorUDID: try values.decodeIfPresent(String.self, forKey: .pinnedSimulatorUDID)
         )
     }
 
@@ -166,6 +184,8 @@ public struct GlidexPreferenceValues: Codable, Equatable, Sendable {
         try values.encode(showsActiveTouches, forKey: .showsActiveTouches)
         try values.encode(prefersAnchorLocked, forKey: .prefersAnchorLocked)
         try values.encode(requiresPointerOverSimulator, forKey: .requiresPointerOverSimulator)
+        try values.encode(simulatorTargetingMode, forKey: .simulatorTargetingMode)
+        try values.encodeIfPresent(pinnedSimulatorUDID, forKey: .pinnedSimulatorUDID)
     }
 
     public var showsTouchIndicator: Bool {
@@ -319,6 +339,20 @@ public final class GlidexAppState {
     public func setRequiresPointerOverSimulator(_ requires: Bool) {
         var next = snapshot
         next.preferences.requiresPointerOverSimulator = requires
+        commit(next)
+    }
+
+    public func followFocusedSimulator() {
+        var next = snapshot
+        next.preferences.simulatorTargetingMode = .followFocus
+        next.preferences.pinnedSimulatorUDID = nil
+        commit(next)
+    }
+
+    public func pinSimulator(udid: String) {
+        var next = snapshot
+        next.preferences.simulatorTargetingMode = .pinned
+        next.preferences.pinnedSimulatorUDID = udid
         commit(next)
     }
 

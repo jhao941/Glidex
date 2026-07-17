@@ -10,6 +10,7 @@ struct CaptureDiagnostics {
     let hostDescriptor: SimulatorDisplayDescriptor?
     let overlayFrame: CGRect
     let overlayVisible: Bool
+    let compatibility: CompatibilitySelfCheck
 
     func report(recovery: String?) -> String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
@@ -59,11 +60,18 @@ struct CaptureDiagnostics {
                 "  Overlay frame: \(rect(overlayFrame))\n" +
                 "  Overlay visible: \(yesNo(overlayVisible))",
             "Configuration\n" +
+                "  Simulator targeting: \(snapshot.preferences.simulatorTargetingMode.rawValue)\n" +
+                "  Pinned Simulator: \(snapshot.preferences.pinnedSimulatorUDID ?? "None")\n" +
                 "  Pointer/visibility constraint: \(yesNo(snapshot.preferences.requiresPointerOverSimulator))\n" +
                 "  Border: \(snapshot.preferences.borderVisibility.rawValue)\n" +
                 "  Anchor indicator: \(yesNo(snapshot.preferences.showsAnchorIndicator))\n" +
                 "  Touch indicators: \(yesNo(snapshot.preferences.showsActiveTouches))\n" +
                 "  Anchor lock: \(snapshot.anchorLockState.rawValue)",
+            "Compatibility Self-Check\n" +
+                "  Overall: \(compatibility.overallStatus.rawValue)\n" +
+                compatibility.checks.map {
+                    "  [\($0.status.rawValue)] \($0.name): \($0.detail)"
+                }.joined(separator: "\n"),
         ]
         if let recovery, !recovery.isEmpty {
             sections.append("Suggested Recovery\n  \(recovery)")

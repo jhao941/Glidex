@@ -61,6 +61,47 @@ struct GestureRecordingStoreTests {
         #expect(loaded.recording == expected)
     }
 
+    @Test("renames atomically and deletes recordings")
+    func renameAndDelete() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = GestureRecordingStore(directoryURL: directory)
+        let original = try store.save(recording(name: "Original", date: Date(timeIntervalSince1970: 400)))
+
+        let renamed = try store.rename(original, to: "Daily Login")
+
+        #expect(renamed.recording.name == "Daily Login")
+        #expect(renamed.url.lastPathComponent.contains("Daily-Login"))
+        #expect(!FileManager.default.fileExists(atPath: original.url.path))
+        let recordings = try store.recordings()
+        #expect(recordings.map(\.recording) == [renamed.recording])
+        #expect(recordings.first?.url.standardizedFileURL.path == renamed.url.standardizedFileURL.path)
+
+        try store.delete(renamed)
+        #expect(try store.recordings().isEmpty)
+    }
+
+    @Test("imports and exports validated recordings")
+    func importAndExport() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let store = GestureRecordingStore(directoryURL: directory.appendingPathComponent("library"))
+        let value = recording(name: "Portable", date: Date(timeIntervalSince1970: 500))
+        let source = directory.appendingPathComponent("source.json")
+        try GestureRecordingCodec.encode(value).write(to: source)
+
+        let imported = try store.importRecording(from: source)
+        let exported = directory.appendingPathComponent("exported.json")
+        try store.export(imported, to: exported)
+
+        #expect(
+            imported.url.deletingLastPathComponent().standardizedFileURL.path
+                == store.directoryURL.standardizedFileURL.path
+        )
+        #expect(try GestureRecordingCodec.decode(Data(contentsOf: exported)) == value)
+    }
+
     private func temporaryDirectory() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("GlidexRecordingStoreTests-\(UUID())", isDirectory: true)

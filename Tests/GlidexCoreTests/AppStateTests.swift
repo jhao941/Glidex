@@ -10,7 +10,20 @@ struct AppStateTests {
         #expect(state.snapshot.preferences.isEnabled)
         #expect(state.snapshot.preferences.inputMode == .navigate)
         #expect(state.snapshot.preferences.requiresPointerOverSimulator)
+        #expect(state.snapshot.preferences.simulatorTargetingMode == .followFocus)
         #expect(state.snapshot.status == .waiting("Looking for Simulator"))
+    }
+
+    @Test("targeting can pin a device and return to following focus")
+    func targetingMode() {
+        let state = GlidexAppState()
+        state.pinSimulator(udid: "SIM-1")
+        #expect(state.snapshot.preferences.simulatorTargetingMode == .pinned)
+        #expect(state.snapshot.preferences.pinnedSimulatorUDID == "SIM-1")
+
+        state.followFocusedSimulator()
+        #expect(state.snapshot.preferences.simulatorTargetingMode == .followFocus)
+        #expect(state.snapshot.preferences.pinnedSimulatorUDID == nil)
     }
 
     @Test("pointer requirement can be disabled")

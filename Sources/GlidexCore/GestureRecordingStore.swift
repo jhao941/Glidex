@@ -77,6 +77,33 @@ public final class GestureRecordingStore: @unchecked Sendable {
         )
     }
 
+    @discardableResult
+    public func importRecording(from url: URL) throws -> StoredGestureRecording {
+        try save(load(from: url).recording)
+    }
+
+    @discardableResult
+    public func rename(_ stored: StoredGestureRecording, to name: String) throws -> StoredGestureRecording {
+        let renamed = stored.recording.renamed(name)
+        guard renamed.name != stored.recording.name else { return stored }
+        let replacement = try save(renamed)
+        do {
+            try fileManager.removeItem(at: stored.url)
+            return replacement
+        } catch {
+            try? fileManager.removeItem(at: replacement.url)
+            throw error
+        }
+    }
+
+    public func delete(_ stored: StoredGestureRecording) throws {
+        try fileManager.removeItem(at: stored.url)
+    }
+
+    public func export(_ stored: StoredGestureRecording, to url: URL) throws {
+        try GestureRecordingCodec.encode(stored.recording).write(to: url, options: .atomic)
+    }
+
     public func prepareDirectory() throws {
         try fileManager.createDirectory(
             at: directoryURL,

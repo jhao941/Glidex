@@ -22,6 +22,22 @@ public struct GestureRecording: Codable, Equatable, Sendable {
         self.sourceScreen = sourceScreen
         self.events = events
     }
+
+    public var duration: TimeInterval { events.last?.time ?? 0 }
+
+    public var maximumContactCount: Int {
+        events.map(\.contacts.count).max() ?? 0
+    }
+
+    public func renamed(_ name: String) -> GestureRecording {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return GestureRecording(
+            name: trimmed.isEmpty ? self.name : trimmed,
+            recordedAt: recordedAt,
+            sourceScreen: sourceScreen,
+            events: events
+        )
+    }
 }
 
 public struct RecordingScreen: Codable, Equatable, Sendable {

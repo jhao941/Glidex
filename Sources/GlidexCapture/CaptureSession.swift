@@ -24,16 +24,22 @@ enum CaptureAutomationError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .simulatorUnavailable: "Glidex must be active and attached to a Simulator."
-        case .automationBusy: "Stop the current recording or replay first."
-        case .notRecording: "No gesture recording is active."
-        case .noRecording: "No saved gesture recording is available."
+        case .simulatorUnavailable: L10n.text("Glidex must be active and attached to a Simulator.")
+        case .automationBusy: L10n.text("Stop the current recording or replay first.")
+        case .notRecording: L10n.text("No gesture recording is active.")
+        case .noRecording: L10n.text("No saved gesture recording is available.")
         }
     }
 }
 
 @MainActor
 final class CaptureSession {
+    private struct ReplayRequest {
+        let stored: StoredGestureRecording
+        let playbackRate: Double
+        let loops: Bool
+    }
+
     private enum RawInputAdmission: Equatable {
         case idle
         case allowed
@@ -53,6 +59,7 @@ final class CaptureSession {
     private let recorder: GestureRecorder
     private let replayEngine: GestureReplayEngine
     private let recordingStore: GestureRecordingStore
+    private let calibrationStore: CalibrationProfileStore
 
     private var rawTouchStream: MultitouchSupportRawTouchStream?
     private var rawStreamGeneration = 0
@@ -66,6 +73,7 @@ final class CaptureSession {
     private var lastHostTarget: SimulatorWindowTracker.Target?
     private var lastSimulatorPID: pid_t?
     private var frameAdjustment = OverlayFrameAdjustment()
+    private var calibrationProfileKey: CalibrationProfileKey?
     private var lastEnabled: Bool
     private var lastCalibrationMode: Bool
     private var isAttaching = false
@@ -74,10 +82,15 @@ final class CaptureSession {
     private var globalShortcutMonitor: Any?
     private var localShortcutMonitor: Any?
     private var rawInputAdmission: RawInputAdmission = .idle
+    private var replayRequest: ReplayRequest?
+    private(set) var availableSimulators: [BootedSimulatorRecord] = []
     private(set) var automationState: CaptureAutomationState {
         didSet { onAutomationStateChange?(automationState) }
     }
     var onAutomationStateChange: ((CaptureAutomationState) -> Void)?
+    var onAvailableSimulatorsChange: (([BootedSimulatorRecord]) -> Void)? {
+        didSet { onAvailableSimulatorsChange?(availableSimulators) }
+    }
 
     init(
         logger: Logger,
@@ -109,6 +122,7 @@ final class CaptureSession {
         self.replayEngine = GestureReplayEngine(sink: observingSink)
         let recordingDirectory = try GestureRecordingStore.defaultDirectoryURL()
         self.recordingStore = GestureRecordingStore(directoryURL: recordingDirectory)
+        self.calibrationStore = CalibrationProfileStore()
         self.windowTracker = SimulatorWindowTracker(logger: logger)
         self.lastEnabled = state.snapshot.preferences.isEnabled
         self.lastCalibrationMode = state.snapshot.isCalibrationMode
@@ -132,13 +146,68 @@ final class CaptureSession {
         attemptAttach(promptForAccessibility: true)
     }
 
+    func followFocusedSimulator() {
+        state.followFocusedSimulator()
+        if let ownerPID = windowTracker.frontmostHostPID {
+            handleHostApplicationActivated(ownerPID: ownerPID)
+        }
+    }
+
+    func pinCurrentSimulator() {
+        guard let udid = nativeTarget?.udid else { return }
+        state.pinSimulator(udid: udid)
+    }
+
+    func selectSimulator(udid: String) {
+        guard automationState.isIdle else {
+            logger.warn("ignoring manual device switch while gesture automation is active target=\(udid)")
+            return
+        }
+        guard let currentTarget = nativeTarget else {
+            state.pinSimulator(udid: udid)
+            reattach()
+            return
+        }
+        if currentTarget.udid.caseInsensitiveCompare(udid) == .orderedSame {
+            state.pinSimulator(udid: udid)
+            return
+        }
+
+        do {
+            let devices = try loadAvailableSimulators()
+            let displays = windowTracker.discoverTargets(
+                simulatorSize: currentTarget.pointSize.cgSize
+            )
+            let decision = SimulatorAttachmentPolicy.decide(
+                displays: displays.map(\.descriptor),
+                devices: devices,
+                targetingMode: .pinned,
+                pinnedUDID: udid,
+                currentUDID: currentTarget.udid,
+                currentDisplay: lastHostTarget?.descriptor
+            )
+            switch decision {
+            case let .switchDevice(descriptor, record):
+                guard let tracked = displays.first(where: { $0.descriptor == descriptor }),
+                      switchToDisplay(record: record, tracked: tracked, currentTarget: currentTarget) else { return }
+                state.pinSimulator(udid: udid)
+            case .keepCurrent, .switchHost:
+                state.pinSimulator(udid: udid)
+            case .unavailable, .ambiguous, .attach:
+                logger.warn("manual Simulator target is unavailable or ambiguous target=\(udid)")
+            }
+        } catch {
+            logger.error("manual Simulator target switch failed: \(error)")
+        }
+    }
+
     func startRecording() throws {
         guard automationState.isIdle else { throw CaptureAutomationError.automationBusy }
         guard canOperateAutomation, let target = selectedTarget else {
             throw CaptureAutomationError.simulatorUnavailable
         }
         try recorder.start(
-            name: "Recording \(Self.recordingNameFormatter.string(from: Date()))",
+            name: L10n.text("Recording %@", Self.recordingNameFormatter.string(from: Date())),
             sourceScreen: target.pointSize
         )
         automationState = .recording
@@ -180,12 +249,54 @@ final class CaptureSession {
         try replay(recordingStore.load(from: url))
     }
 
+    func recordings() throws -> [StoredGestureRecording] {
+        try recordingStore.recordings()
+    }
+
+    @discardableResult
+    func importRecording(from url: URL) throws -> StoredGestureRecording {
+        let stored = try recordingStore.importRecording(from: url)
+        refreshRecordingAvailability()
+        return stored
+    }
+
+    @discardableResult
+    func renameRecording(_ stored: StoredGestureRecording, to name: String) throws -> StoredGestureRecording {
+        let renamed = try recordingStore.rename(stored, to: name)
+        refreshRecordingAvailability()
+        return renamed
+    }
+
+    func deleteRecording(_ stored: StoredGestureRecording) throws {
+        guard automationState.isIdle else { throw CaptureAutomationError.automationBusy }
+        try recordingStore.delete(stored)
+        refreshRecordingAvailability()
+    }
+
+    func exportRecording(_ stored: StoredGestureRecording, to url: URL) throws {
+        try recordingStore.export(stored, to: url)
+    }
+
+    func replayRecording(
+        _ stored: StoredGestureRecording,
+        playbackRate: Double,
+        loops: Bool
+    ) throws {
+        guard automationState.isIdle else { throw CaptureAutomationError.automationBusy }
+        guard canOperateAutomation else { throw CaptureAutomationError.simulatorUnavailable }
+        try replay(stored, playbackRate: playbackRate, loops: loops)
+    }
+
     func prepareRecordingsDirectory() throws -> URL {
         try recordingStore.prepareDirectory()
         return recordingStore.directoryURL
     }
 
-    private func replay(_ stored: StoredGestureRecording) throws {
+    private func replay(
+        _ stored: StoredGestureRecording,
+        playbackRate: Double = 1,
+        loops: Bool = false
+    ) throws {
         guard let target = selectedTarget else {
             throw CaptureAutomationError.simulatorUnavailable
         }
@@ -195,18 +306,30 @@ final class CaptureSession {
         state.clearIndicators()
         rawInputAdmission = .blocked
         automationState = .replaying(stored.recording.name)
+        replayRequest = ReplayRequest(
+            stored: stored,
+            playbackRate: playbackRate,
+            loops: loops
+        )
         do {
-            try replayEngine.play(
-                stored.recording,
-                targetScreen: target.pointSize
-            ) { [weak self] outcome in
-                self?.finishReplay(outcome)
-            }
+            try startReplayCycle(target: target)
             logger.info("gesture replay started name=\(stored.recording.name) events=\(stored.recording.events.count)")
         } catch {
+            replayRequest = nil
             rawInputAdmission = .idle
             automationState = .idle(hasRecording: true)
             throw error
+        }
+    }
+
+    private func startReplayCycle(target: SimulatorTarget) throws {
+        guard let replayRequest else { return }
+        try replayEngine.play(
+            replayRequest.stored.recording,
+            targetScreen: target.pointSize,
+            playbackRate: replayRequest.playbackRate
+        ) { [weak self] outcome in
+            self?.finishReplay(outcome)
         }
     }
 
@@ -215,13 +338,21 @@ final class CaptureSession {
     }
 
     func diagnostics() -> CaptureDiagnostics {
-        CaptureDiagnostics(
+        let compatibility = CompatibilitySelfCheck.run(
+            hostBundleURL: lastHostTarget?.hostBundleURL,
+            hostDetected: lastHostTarget != nil,
+            bootedSimulatorCount: availableSimulators.count,
+            rawTouchStreamRunning: rawTouchStream != nil,
+            hidTargetReady: selectedTarget != nil && state.snapshot.status == .active
+        )
+        return CaptureDiagnostics(
             snapshot: state.snapshot,
             rawTouchStreamRunning: rawTouchStream != nil,
             windowTrackingRunning: windowTracker.isFollowing,
             hostDescriptor: lastHostTarget?.descriptor,
             overlayFrame: overlay.frame,
-            overlayVisible: overlay.isVisible
+            overlayVisible: overlay.isVisible,
+            compatibility: compatibility
         )
     }
 
@@ -315,9 +446,18 @@ final class CaptureSession {
         }
         installModifierMonitors()
 
+        let devices: [BootedSimulatorRecord]
+        do {
+            devices = try loadAvailableSimulators()
+        } catch {
+            fail(.other("Simulator discovery failed: \(error)"), retry: true)
+            return
+        }
+
         let discoveredDisplays = windowTracker.discoverTargets(simulatorSize: Self.fallbackSimulatorSize.cgSize)
         let displays: [SimulatorWindowTracker.Target]
-        if let frontmostHostPID = windowTracker.frontmostHostPID {
+        if state.snapshot.preferences.simulatorTargetingMode == .followFocus,
+           let frontmostHostPID = windowTracker.frontmostHostPID {
             let focusedDisplays = windowTracker.discoverTargets(
                 ownerPID: frontmostHostPID,
                 simulatorSize: Self.fallbackSimulatorSize.cgSize
@@ -333,28 +473,33 @@ final class CaptureSession {
             wait(reason: "Looking for Simulator window")
             return
         }
-        do {
-            let devices = try injector.listBootedSimulators()
-            switch SimulatorDisplaySelector.resolve(
-                displays: displays.map(\.descriptor),
-                devices: devices
-            ) {
-            case .unavailable:
+        switch SimulatorAttachmentPolicy.decide(
+            displays: displays.map(\.descriptor),
+            devices: devices,
+            targetingMode: state.snapshot.preferences.simulatorTargetingMode,
+            pinnedUDID: state.snapshot.preferences.pinnedSimulatorUDID,
+            currentUDID: nil,
+            currentDisplay: nil
+        ) {
+        case .unavailable:
+            if state.snapshot.preferences.simulatorTargetingMode == .pinned {
+                wait(reason: "Pinned Simulator is unavailable")
+            } else {
                 wait(reason: devices.isEmpty ? "No booted Simulator" : "Looking for Simulator window")
-            case .ambiguous:
-                fail(.ambiguousTarget, retry: true)
-            case let .selected(descriptor, record):
-                guard let tracked = displays.first(where: { $0.descriptor == descriptor }) else {
-                    wait(reason: "Simulator display changed during attachment")
-                    return
-                }
-                logger.info(
-                    "selected display host=\(descriptor.hostKind.rawValue) pid=\(descriptor.ownerPID) displayUDID=\(descriptor.deviceUDID ?? "unavailable") targetUDID=\(record.udid)"
-                )
-                attach(record: record, tracked: tracked)
             }
-        } catch {
-            fail(.other("Simulator discovery failed: \(error)"), retry: true)
+        case .ambiguous:
+            fail(.ambiguousTarget, retry: true)
+        case let .attach(descriptor, record):
+            guard let tracked = displays.first(where: { $0.descriptor == descriptor }) else {
+                wait(reason: "Simulator display changed during attachment")
+                return
+            }
+            logger.info(
+                "selected display host=\(descriptor.hostKind.rawValue) pid=\(descriptor.ownerPID) displayUDID=\(descriptor.deviceUDID ?? "unavailable") targetUDID=\(record.udid)"
+            )
+            attach(record: record, tracked: tracked)
+        case .keepCurrent, .switchHost, .switchDevice:
+            break
         }
     }
 
@@ -380,7 +525,7 @@ final class CaptureSession {
 
             nativeTarget = target
             state.resetAnchorLockForAttachment()
-            frameAdjustment = OverlayFrameAdjustment()
+            calibrationProfileKey = nil
             applyTrackedTarget(
                 tracked,
                 nativeTarget: target,
@@ -439,6 +584,7 @@ final class CaptureSession {
 
     private func handleHostApplicationActivated(ownerPID: pid_t) {
         guard state.snapshot.preferences.isEnabled,
+              state.snapshot.preferences.simulatorTargetingMode == .followFocus,
               !state.snapshot.isCalibrationMode,
               !isAttaching else { return }
         guard let nativeTarget else {
@@ -450,81 +596,106 @@ final class CaptureSession {
             ownerPID: ownerPID,
             simulatorSize: nativeTarget.pointSize.cgSize
         )
-        if displays.count == 1,
-           let tracked = displays.first,
-           let displayUDID = tracked.descriptor.deviceUDID,
-           displayUDID.caseInsensitiveCompare(nativeTarget.udid) == .orderedSame {
-            switchToActivatedHost(targetUDID: nativeTarget.udid, tracked: tracked, currentTarget: nativeTarget)
-            return
-        }
         do {
-            let devices = try injector.listBootedSimulators()
-            switch SimulatorDisplaySelector.resolve(
+            let devices = try loadAvailableSimulators()
+            switch SimulatorAttachmentPolicy.decide(
                 displays: displays.map(\.descriptor),
                 devices: devices,
+                targetingMode: .followFocus,
+                pinnedUDID: nil,
+                currentUDID: nativeTarget.udid,
+                currentDisplay: lastHostTarget?.descriptor,
                 activatedOwnerPID: ownerPID
             ) {
             case .unavailable:
                 logger.warn("activated display host has no attachable Simulator screen pid=\(ownerPID)")
             case .ambiguous:
                 logger.warn("activated display host is ambiguous pid=\(ownerPID)")
-            case let .selected(descriptor, record):
+            case .keepCurrent:
+                return
+            case let .switchHost(descriptor, record), let .switchDevice(descriptor, record):
                 guard let tracked = displays.first(where: { $0.descriptor == descriptor }) else { return }
-                switchToActivatedHost(targetUDID: record.udid, tracked: tracked, currentTarget: nativeTarget)
+                _ = switchToDisplay(record: record, tracked: tracked, currentTarget: nativeTarget)
+            case let .attach(descriptor, record):
+                guard let tracked = displays.first(where: { $0.descriptor == descriptor }) else { return }
+                attach(record: record, tracked: tracked)
             }
         } catch {
             logger.error("activated display host discovery failed: \(error)")
         }
     }
 
-    private func switchToActivatedHost(
-        targetUDID: String,
+    @discardableResult
+    private func switchToDisplay(
+        record: BootedSimulatorRecord,
         tracked: SimulatorWindowTracker.Target,
         currentTarget: SimulatorTarget
-    ) {
+    ) -> Bool {
         guard tracked.kind == .screen else {
             logger.warn("activated display host screen is not ready pid=\(tracked.ownerPID)")
-            return
+            return false
         }
         if lastHostTarget?.descriptor.representsSameDisplay(as: tracked.descriptor) == true {
-            return
+            return true
         }
 
-        let isSameDevice = targetUDID.caseInsensitiveCompare(currentTarget.udid) == .orderedSame
+        let isSameDevice = record.udid.caseInsensitiveCompare(currentTarget.udid) == .orderedSame
         guard isSameDevice || automationState.isIdle else {
-            logger.warn("ignoring device switch while gesture automation is active target=\(targetUDID)")
-            return
+            logger.warn("ignoring device switch while gesture automation is active target=\(record.udid)")
+            return false
         }
 
+        let previousAdjustment = frameAdjustment
+        let previousCalibrationKey = calibrationProfileKey
         do {
             let target: SimulatorTarget
+            let preparedTarget: SimulatorInjector.PreparedTarget?
             if isSameDevice {
                 target = currentTarget
+                preparedTarget = nil
             } else {
+                let prepared = try injector.prepareTarget(udid: record.udid)
+                target = prepared.target
+                preparedTarget = prepared
                 coordinator.prepareForDeviceChange()
-                target = try injector.selectTarget(udid: targetUDID)
-                nativeTarget = target
                 state.resetAnchorLockForAttachment()
             }
 
             windowTracker.stop()
-            frameAdjustment = OverlayFrameAdjustment()
+            calibrationProfileKey = nil
             applyTrackedTarget(
                 tracked,
                 nativeTarget: target,
                 reason: isSameDevice ? "Display host focus changed" : "Focused Simulator device changed"
             )
             startWindowTracking(for: target, hostTarget: tracked)
+            if let preparedTarget {
+                injector.commitTarget(preparedTarget)
+                nativeTarget = target
+            }
             retryTimer?.invalidate()
             retryTimer = nil
             state.transition(to: .active, target: selectedTarget)
             logger.info(
                 "capture display focus switched host=\(tracked.descriptor.hostKind.rawValue) pid=\(tracked.ownerPID) target=\(target.udid)"
             )
+            return true
         } catch {
             logger.error("focused Simulator target switch failed: \(error)")
+            frameAdjustment = previousAdjustment
+            calibrationProfileKey = previousCalibrationKey
             startWindowTracking(for: currentTarget, hostTarget: lastHostTarget ?? tracked)
+            return false
         }
+    }
+
+    private func loadAvailableSimulators() throws -> [BootedSimulatorRecord] {
+        let devices = try injector.listBootedSimulators()
+        if devices != availableSimulators {
+            availableSimulators = devices
+            onAvailableSimulatorsChange?(devices)
+        }
+        return devices
     }
 
     private func handleTrackedLookup(
@@ -571,6 +742,16 @@ final class CaptureSession {
         reason: String,
         activate: Bool = true
     ) {
+        let profileKey = CalibrationProfileKey(
+            hostKind: tracked.descriptor.hostKind,
+            deviceUDID: nativeTarget.udid,
+            displayFrame: tracked.frame,
+            nativeSize: nativeTarget.pointSize
+        )
+        if calibrationProfileKey != profileKey {
+            calibrationProfileKey = profileKey
+            frameAdjustment = calibrationStore.adjustment(for: profileKey) ?? OverlayFrameAdjustment()
+        }
         let adjustedFrame = frameAdjustment.applying(to: tracked.frame)
         let geometry = SimulatorDisplayGeometry(
             desktopFrame: adjustedFrame,
@@ -609,6 +790,9 @@ final class CaptureSession {
     private func finishCalibration(frame: CGRect) {
         if let lastTrackedFrame {
             frameAdjustment = OverlayFrameAdjustment(base: lastTrackedFrame, adjusted: frame)
+            if let calibrationProfileKey {
+                calibrationStore.save(frameAdjustment, for: calibrationProfileKey)
+            }
         }
         guard let nativeTarget else { return }
         let geometry = SimulatorDisplayGeometry(
@@ -641,6 +825,8 @@ final class CaptureSession {
         nativeTarget = nil
         lastTrackedFrame = nil
         lastHostTarget = nil
+        calibrationProfileKey = nil
+        frameAdjustment = OverlayFrameAdjustment()
         lastSimulatorPID = nil
         overlay.hide()
         state.transition(to: .waiting(reason))
@@ -654,6 +840,7 @@ final class CaptureSession {
     }
 
     private func stopActiveInput(reason: String) {
+        replayRequest = nil
         replayEngine.stop()
         recorder.discard()
         automationState = .idle(hasRecording: hasStoredRecording)
@@ -697,6 +884,20 @@ final class CaptureSession {
 
     private func finishReplay(_ outcome: GestureReplayOutcome) {
         guard case .replaying = automationState else { return }
+        if outcome == .completed,
+           let replayRequest,
+           replayRequest.loops,
+           canOperateAutomation,
+           let target = selectedTarget {
+            do {
+                try startReplayCycle(target: target)
+                logger.info("gesture replay loop restarted name=\(replayRequest.stored.recording.name)")
+                return
+            } catch {
+                logger.error("gesture replay loop failed: \(error)")
+            }
+        }
+        replayRequest = nil
         rawInputAdmission = .idle
         awaitsTouchRelease = physicalActiveContactCount > 0
         automationState = .idle(hasRecording: hasStoredRecording)
@@ -707,6 +908,12 @@ final class CaptureSession {
             logger.info("gesture replay stopped")
         case let .failed(message):
             logger.error("gesture replay failed: \(message)")
+        }
+    }
+
+    private func refreshRecordingAvailability() {
+        if automationState.isIdle {
+            automationState = .idle(hasRecording: hasStoredRecording)
         }
     }
 

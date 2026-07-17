@@ -5,22 +5,31 @@ final class DiagnosticsWindowController: NSWindowController {
     var onRefresh: (() -> String)?
     var onReconnect: (() -> Void)?
     var onSetCalibrationMode: ((Bool) -> Void)?
+    var onExport: (() -> Void)?
 
-    private let textView = NSTextView()
+    private let scrollView: NSScrollView
+    private let textView: NSTextView
     private let calibrationButton = NSButton(
-        checkboxWithTitle: "Calibration Mode",
+        checkboxWithTitle: L10n.text("Calibration Mode"),
         target: nil,
         action: nil
     )
 
     init() {
+        let scrollView = NSTextView.scrollableTextView()
+        guard let textView = scrollView.documentView as? NSTextView else {
+            preconditionFailure("AppKit did not create a text view for Diagnostics")
+        }
+        self.scrollView = scrollView
+        self.textView = textView
+
         let window = NSWindow(
             contentRect: CGRect(x: 0, y: 0, width: 620, height: 560),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
-        window.title = "Glidex Diagnostics"
+        window.title = L10n.text("Glidex Diagnostics")
         window.minSize = CGSize(width: 500, height: 380)
         window.isReleasedWhenClosed = false
         super.init(window: window)
@@ -39,25 +48,29 @@ final class DiagnosticsWindowController: NSWindowController {
     }
 
     private func configureContent() {
+        textView.isRichText = false
+        textView.importsGraphics = false
         textView.isEditable = false
         textView.isSelectable = true
+        textView.drawsBackground = true
+        textView.backgroundColor = .textBackgroundColor
+        textView.textColor = .textColor
         textView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         textView.textContainerInset = CGSize(width: 12, height: 12)
 
-        let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = true
         scrollView.borderType = .bezelBorder
-        scrollView.documentView = textView
 
-        let copyButton = NSButton(title: "Copy Diagnostics", target: self, action: #selector(copyDiagnostics(_:)))
-        let refreshButton = NSButton(title: "Refresh", target: self, action: #selector(refresh(_:)))
-        let reconnectButton = NSButton(title: "Reconnect", target: self, action: #selector(reconnect(_:)))
+        let copyButton = NSButton(title: L10n.text("Copy Diagnostics"), target: self, action: #selector(copyDiagnostics(_:)))
+        let refreshButton = NSButton(title: L10n.text("Refresh"), target: self, action: #selector(refresh(_:)))
+        let reconnectButton = NSButton(title: L10n.text("Reconnect"), target: self, action: #selector(reconnect(_:)))
+        let exportButton = NSButton(title: L10n.text("Export…"), target: self, action: #selector(exportDiagnostics(_:)))
         calibrationButton.target = self
         calibrationButton.action = #selector(toggleCalibration(_:))
-        let closeButton = NSButton(title: "Close", target: self, action: #selector(closeWindow(_:)))
+        let closeButton = NSButton(title: L10n.text("Close"), target: self, action: #selector(closeWindow(_:)))
         closeButton.keyEquivalent = "\r"
 
-        let buttons = NSStackView(views: [copyButton, refreshButton, reconnectButton, calibrationButton, closeButton])
+        let buttons = NSStackView(views: [copyButton, refreshButton, reconnectButton, exportButton, calibrationButton, closeButton])
         buttons.orientation = .horizontal
         buttons.alignment = .centerY
         buttons.spacing = 8
@@ -87,6 +100,7 @@ final class DiagnosticsWindowController: NSWindowController {
     }
 
     @objc private func reconnect(_ sender: Any?) { onReconnect?() }
+    @objc private func exportDiagnostics(_ sender: Any?) { onExport?() }
 
     @objc private func toggleCalibration(_ sender: NSButton) {
         onSetCalibrationMode?(sender.state == .on)

@@ -20,6 +20,10 @@ Glidex 同时支持旧版 Simulator 应用和 Xcode Device Hub。项目使用未
 - 可选的 Simulator 可见性和指针范围限制
 - 锚点和活动触点指示器
 - 版本化 JSON 手势录制与确定性回放
+- 支持重命名、导入导出、回放速度和循环的录制库
+- 按宿主和设备保存的校准配置
+- 兼容性自检与一键导出诊断包
+- 英文和简体中文界面
 - 菜单栏控制、诊断和轻量自动化 CLI
 
 ## 系统要求
@@ -51,7 +55,9 @@ swift run glidex-capture
 open dist/Glidex.app
 ```
 
-该脚本生成带 ad-hoc 签名的开发版应用，未经公证，不能替代公开分发所需的 Gatekeeper 流程。
+默认情况下，该脚本生成带 ad-hoc 签名的开发版应用。设置
+`GLIDEX_SIGN_IDENTITY` 后，可以使用 Developer ID Application 证书生成启用
+hardened runtime 的构建。
 
 生成可拖拽安装的磁盘映像：
 
@@ -59,7 +65,14 @@ open dist/Glidex.app
 ./scripts/build-dmg.sh
 ```
 
-生成的 `dist/Glidex-0.1.0.dmg` 包含 Glidex 和 Applications 快捷入口，其签名状态与内部 app bundle 相同。
+生成的带版本号 DMG 包含 Glidex 和 Applications 快捷入口，其签名状态与内部
+app bundle 相同。
+
+仓库根目录的 `VERSION` 和 `BUILD_NUMBER` 是正式版本来源，也可通过
+`GLIDEX_VERSION` 和 `GLIDEX_BUILD_NUMBER` 临时覆盖。带标签的发布会通过
+`.github/workflows/release.yml` 导入 Developer ID 证书，公证并装订 app 与
+DMG、生成 SHA-256 校验值，然后创建 GitHub Release。所需凭据和发布流程见
+[`docs/releasing.md`](docs/releasing.md)。
 
 ## 输入模式
 
@@ -85,6 +98,8 @@ Point 使用固定的虚拟手指位置。Edge 选择最近的屏幕边缘，并
 2. 执行一个或多个手势。
 3. 选择 **Stop and Save Recording**。
 4. 使用 **Replay Last Recording** 或 **Replay Recording…**。
+
+选择 **Manage Recordings…** 可以重命名、删除、导入、导出录制，调整回放速度或循环回放。
 
 录制文件保存在：
 
@@ -128,7 +143,7 @@ Replay 在手势识别之后的 `TouchSink` 层进入，因此能为所有输入
 - 自动连接遇到多个候选 Simulator 窗口时会拒绝猜测。
 - 部分 Simulator 或系统 UI 版本存在自身的手势问题。将行为归因于 Glidex 前，请在多个 iOS runtime 上验证。
 - HID 发送成功日志不能证明目标 UI 已响应。
-- 仓库尚未配置正式发布签名与公证。
+- 未提供 Developer ID 证书时，本地构建仍使用 ad-hoc 签名。
 
 ## 隐私与安全
 

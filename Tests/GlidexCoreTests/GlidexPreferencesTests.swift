@@ -15,7 +15,9 @@ struct GlidexPreferencesTests {
             showsAnchorIndicator: false,
             showsActiveTouches: true,
             prefersAnchorLocked: true,
-            requiresPointerOverSimulator: false
+            requiresPointerOverSimulator: false,
+            simulatorTargetingMode: .pinned,
+            pinnedSimulatorUDID: "SIM-1"
         )
         preferences.save(expected)
         #expect(preferences.load() == expected)
@@ -38,6 +40,16 @@ struct GlidexPreferencesTests {
         #expect(!decoded.showsAnchorIndicator)
         #expect(!decoded.showsActiveTouches)
         #expect(decoded.requiresPointerOverSimulator)
+        #expect(decoded.simulatorTargetingMode == .followFocus)
+        #expect(decoded.pinnedSimulatorUDID == nil)
+    }
+
+    @Test("pinned mode without a device falls back to following focus")
+    func invalidPinnedTargetMigration() throws {
+        let invalid = Data(#"{"simulatorTargetingMode":"pinned"}"#.utf8)
+        let decoded = try JSONDecoder().decode(GlidexPreferenceValues.self, from: invalid)
+        #expect(decoded.simulatorTargetingMode == .followFocus)
+        #expect(decoded.pinnedSimulatorUDID == nil)
     }
 }
 

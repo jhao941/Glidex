@@ -49,7 +49,7 @@ public struct SimulatorDisplayGeometry: Equatable, Sendable {
     }
 }
 
-public struct OverlayFrameAdjustment: Equatable, Sendable {
+public struct OverlayFrameAdjustment: Codable, Equatable, Sendable {
     public var originDelta: CGSize
     public var sizeDelta: CGSize
 

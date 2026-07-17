@@ -2,6 +2,19 @@
 
 All notable changes to Glidex will be documented in this file.
 
+## 0.2.0 - Unreleased
+
+- Follow the focused Simulator or Device Hub window across different booted
+  devices, with pinning, manual selection, and atomic target switching.
+- Persist calibration independently for each host, device, orientation, and
+  display scale.
+- Add a recording library with rename, delete, import/export, playback speed,
+  and looping.
+- Add compatibility self-checks and ZIP diagnostics export with recent logs.
+- Add Simplified Chinese localization for the menu bar and management windows.
+- Add repository-managed versions and an optional Developer ID, notarization,
+  checksum, and GitHub Release workflow.
+
 ## 0.1.0 - Unreleased
 
 - Add Device Hub and legacy Simulator attachment.

@@ -1,6 +1,10 @@
 import Foundation
 
 public final class SimulatorInjector: @unchecked Sendable {
+    public struct PreparedTarget: Sendable {
+        fileprivate let simulator: BootedSimulatorRecord
+        public let target: SimulatorTarget
+    }
     private let logger: Logger
     private let loader: PrivateFrameworkLoader
     private let resolver: BootedSimulatorResolver
@@ -49,12 +53,21 @@ public final class SimulatorInjector: @unchecked Sendable {
 
     @discardableResult
     public func selectTarget(udid: String) throws -> SimulatorTarget {
+        let prepared = try prepareTarget(udid: udid)
+        commitTarget(prepared)
+        return prepared.target
+    }
+
+    public func prepareTarget(udid: String) throws -> PreparedTarget {
         let devices = try listBootedSimulators()
         guard let simulator = devices.first(where: { $0.udid.caseInsensitiveCompare(udid) == .orderedSame }) else {
             throw GlidexError.simulatorNotFound("booted simulator not found for UDID \(udid)")
         }
-        selectedSimulator = simulator
-        return try resolvedTarget(for: simulator)
+        return PreparedTarget(simulator: simulator, target: try resolvedTarget(for: simulator))
+    }
+
+    public func commitTarget(_ prepared: PreparedTarget) {
+        selectedSimulator = prepared.simulator
     }
 
     public func selectedTarget() throws -> SimulatorTarget {

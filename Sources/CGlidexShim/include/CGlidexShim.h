@@ -1,6 +1,8 @@
 #import <CoreGraphics/CoreGraphics.h>
 #import <objc/runtime.h>
 
+#import "IndigoWireFormat.h"
+
 typedef void *STObjCObject;
 typedef STObjCObject (*STObjCMsgSendObjectFunc)(STObjCObject, SEL);
 typedef STObjCObject (*STObjCMsgSendObjectObjectFunc)(STObjCObject, SEL, STObjCObject);

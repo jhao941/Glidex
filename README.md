@@ -25,6 +25,10 @@ between macOS and Xcode releases.
 - Optional Simulator visibility and pointer constraints
 - Anchor and active-touch indicators
 - Versioned JSON gesture recording and deterministic replay
+- Recording library with rename, import/export, playback speed, and looping
+- Per-host, per-device calibration profiles
+- Compatibility self-check and one-click diagnostics bundle export
+- English and Simplified Chinese app localization
 - Menu bar controls, diagnostics, and a small automation CLI
 
 ## Requirements
@@ -58,8 +62,9 @@ To build a local app bundle and CLI:
 open dist/Glidex.app
 ```
 
-The script produces an ad-hoc-signed development app. It is not notarized and
-is not intended to bypass Gatekeeper distribution requirements.
+Without environment overrides the script produces an ad-hoc-signed development
+app. Set `GLIDEX_SIGN_IDENTITY` to a Developer ID Application identity for a
+hardened-runtime build.
 
 To build a drag-to-install disk image:
 
@@ -67,8 +72,16 @@ To build a drag-to-install disk image:
 ./scripts/build-dmg.sh
 ```
 
-The resulting `dist/Glidex-0.1.0.dmg` contains Glidex and an Applications
+The resulting versioned DMG contains Glidex and an Applications
 shortcut. It has the same signing status as the app bundle inside it.
+
+`VERSION` and `BUILD_NUMBER` are the repository's canonical release values.
+They can be overridden locally with `GLIDEX_VERSION` and
+`GLIDEX_BUILD_NUMBER`. Tagged releases use `.github/workflows/release.yml` to
+import a Developer ID certificate, notarize and staple both the app and DMG,
+create a SHA-256 checksum, and publish a GitHub Release. See
+[`docs/releasing.md`](docs/releasing.md) for the required secrets and release
+procedure.
 
 ## Input Modes
 
@@ -101,6 +114,9 @@ Open **Automation** in the menu bar:
 2. Perform one or more gestures.
 3. Choose **Stop and Save Recording**.
 4. Use **Replay Last Recording** or **Replay Recording…**.
+
+Choose **Manage Recordings…** to rename, delete, import, export, change replay
+speed, or loop a recording.
 
 Recordings are stored in:
 
@@ -152,7 +168,7 @@ for deeper implementation notes.
 - Some Simulator or system UI builds have their own gesture bugs. Validate on
   more than one iOS runtime before attributing behavior to Glidex.
 - A successful HID send log does not prove the target UI responded.
-- Release signing and notarization are not configured in this repository.
+- Local builds are ad-hoc signed unless a Developer ID identity is supplied.
 
 ## Privacy and Security
 
