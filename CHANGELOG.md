@@ -2,7 +2,7 @@
 
 All notable changes to Glidex will be documented in this file.
 
-## 0.2.0 - Unreleased
+## 0.2.0 - 2026-07-17
 
 - Follow the focused Simulator or Device Hub window across different booted
   devices, with pinning, manual selection, and atomic target switching.
