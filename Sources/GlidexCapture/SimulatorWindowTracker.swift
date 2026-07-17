@@ -141,7 +141,7 @@ final class SimulatorWindowTracker {
             let ownerPID = application.processIdentifier
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                logger.info(
+                self.logger.info(
                     "display host activated bundle=\(application.bundleIdentifier ?? "unknown") pid=\(ownerPID)"
                 )
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in

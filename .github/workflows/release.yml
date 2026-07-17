@@ -15,7 +15,38 @@ permissions:
   contents: write
 
 jobs:
+  release-preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - name: Check release credentials
+        id: check
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_ID_APPLICATION_CERT_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_APPLICATION_CERT_PASSWORD }}
+          CERTIFICATE_IDENTITY: ${{ secrets.DEVELOPER_ID_APPLICATION_IDENTITY }}
+          KEYCHAIN_PASSWORD: ${{ secrets.RELEASE_KEYCHAIN_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          if [[ -n "$CERTIFICATE_BASE64" &&
+                -n "$CERTIFICATE_PASSWORD" &&
+                -n "$CERTIFICATE_IDENTITY" &&
+                -n "$KEYCHAIN_PASSWORD" &&
+                -n "$APPLE_ID" &&
+                -n "$APPLE_TEAM_ID" &&
+                -n "$APPLE_APP_SPECIFIC_PASSWORD" ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Release credentials are not configured; skipping the automated notarized build."
+          fi
+
   notarized-release:
+    needs: release-preflight
+    if: needs.release-preflight.outputs.configured == 'true'
     runs-on: macos-15
     env:
       APPLE_ID: ${{ secrets.APPLE_ID }}
