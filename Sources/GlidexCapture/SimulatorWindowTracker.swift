@@ -48,16 +48,35 @@ final class SimulatorWindowTracker {
     private var lastLookup: Lookup?
     private var selectedTarget: Target?
     private var observer: AXObserver?
+    private var workspaceObserver: NSObjectProtocol?
 
     private(set) var isFollowing = false
+    var onHostApplicationActivated: ((pid_t) -> Void)?
 
     init(logger: Logger) {
         self.logger = logger
         self.hosts = [DeviceHubHost(), LegacySimulatorHost()]
+        observeHostActivation()
+    }
+
+    var frontmostHostPID: pid_t? {
+        guard let application = NSWorkspace.shared.frontmostApplication,
+              SimulatorDisplayHostKind(bundleIdentifier: application.bundleIdentifier) != nil else { return nil }
+        return application.processIdentifier
     }
 
     func discoverTargets(simulatorSize: CGSize) -> [Target] {
         hosts.flatMap { $0.discover(simulatorSize: simulatorSize) }
+    }
+
+    func discoverTargets(ownerPID: pid_t, simulatorSize: CGSize) -> [Target] {
+        let targets = discoverTargets(simulatorSize: simulatorSize).filter { $0.ownerPID == ownerPID }
+        guard targets.count > 1,
+              let focusedWindowFrame = AXSupport.focusedWindowFrame(ownerPID: ownerPID) else { return targets }
+        let focusedTargets = targets.filter {
+            AXSupport.frameDistance($0.windowFrame, focusedWindowFrame) <= 8
+        }
+        return focusedTargets.isEmpty ? targets : focusedTargets
     }
 
     func lookupTarget(simulatorSize: CGSize) -> Lookup {
@@ -99,6 +118,37 @@ final class SimulatorWindowTracker {
         let wasFollowing = isFollowing
         isFollowing = false
         if wasFollowing { logger.info("capture display follow disabled") }
+    }
+
+    func shutdown() {
+        stop()
+        if let workspaceObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(workspaceObserver)
+            self.workspaceObserver = nil
+        }
+        onHostApplicationActivated = nil
+    }
+
+    private func observeHostActivation() {
+        workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey]
+                    as? NSRunningApplication,
+                  SimulatorDisplayHostKind(bundleIdentifier: application.bundleIdentifier) != nil else { return }
+            let ownerPID = application.processIdentifier
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                logger.info(
+                    "display host activated bundle=\(application.bundleIdentifier ?? "unknown") pid=\(ownerPID)"
+                )
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                    self?.onHostApplicationActivated?(ownerPID)
+                }
+            }
+        }
     }
 
     private func poll() {
@@ -344,6 +394,12 @@ private enum AXSupport {
             let title: String? = copyAttribute(window, kAXTitleAttribute)
             return (window, frame, title)
         }
+    }
+
+    static func focusedWindowFrame(ownerPID: pid_t) -> CGRect? {
+        let app = AXUIElementCreateApplication(ownerPID)
+        guard let window: AXUIElement = copyAttribute(app, kAXFocusedWindowAttribute) else { return nil }
+        return frame(window)
     }
 
     static func findLegacyScreenFrame(

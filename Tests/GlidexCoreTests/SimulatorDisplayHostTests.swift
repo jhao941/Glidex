@@ -52,6 +52,46 @@ struct SimulatorDisplayHostTests {
         }
     }
 
+    @Test("the activated host selects its own display when hosts coexist")
+    func activatedHostWins() {
+        let displays = [
+            descriptor(host: .deviceHub, pid: 10, udid: "B"),
+            descriptor(host: .legacySimulator, pid: 20, title: "iPhone 17 Pro"),
+        ]
+        let result = SimulatorDisplaySelector.resolve(
+            displays: displays,
+            devices: [record(name: "iPhone 17 Pro", udid: "B")],
+            activatedOwnerPID: 20
+        )
+        guard case let .selected(display, device) = result else {
+            Issue.record("Expected the activated legacy host")
+            return
+        }
+        #expect(display.hostKind == .legacySimulator)
+        #expect(display.ownerPID == 20)
+        #expect(device.udid == "B")
+    }
+
+    @Test("an unrelated activated process cannot select a display")
+    func unrelatedActivationIsUnavailable() {
+        let result = SimulatorDisplaySelector.resolve(
+            displays: [descriptor(host: .deviceHub, pid: 10, udid: "B")],
+            devices: [record(name: "iPhone 17 Pro", udid: "B")],
+            activatedOwnerPID: 99
+        )
+        guard case .unavailable = result else {
+            Issue.record("Expected an unrelated activation to be ignored")
+            return
+        }
+    }
+
+    @Test("supported display host bundle identifiers are recognized")
+    func supportedBundleIdentifiers() {
+        #expect(SimulatorDisplayHostKind(bundleIdentifier: "com.apple.iphonesimulator") == .legacySimulator)
+        #expect(SimulatorDisplayHostKind(bundleIdentifier: "com.apple.dt.Devices") == .deviceHub)
+        #expect(SimulatorDisplayHostKind(bundleIdentifier: "com.apple.Safari") == nil)
+    }
+
     @Test("a rebuilt AX element retains identity and reports geometry changes")
     func rebuiltElementGeometry() {
         let old = descriptor(host: .deviceHub, pid: 10, udid: "B", frame: CGRect(x: 10, y: 20, width: 300, height: 650))

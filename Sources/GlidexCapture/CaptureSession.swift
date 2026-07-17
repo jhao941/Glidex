@@ -230,6 +230,7 @@ final class CaptureSession {
         retryTimer = nil
         removeModifierMonitors()
         stopActiveInput(reason: "application shutdown")
+        windowTracker.shutdown()
         overlay.hide()
     }
 
@@ -268,6 +269,9 @@ final class CaptureSession {
         }
         coordinator.setRawGestureInputProvider { [weak self] in
             self?.currentRawGestureInputSample() ?? .none
+        }
+        windowTracker.onHostApplicationActivated = { [weak self] ownerPID in
+            self?.handleHostApplicationActivated(ownerPID: ownerPID)
         }
     }
 
@@ -311,7 +315,17 @@ final class CaptureSession {
         }
         installModifierMonitors()
 
-        let displays = windowTracker.discoverTargets(simulatorSize: Self.fallbackSimulatorSize.cgSize)
+        let discoveredDisplays = windowTracker.discoverTargets(simulatorSize: Self.fallbackSimulatorSize.cgSize)
+        let displays: [SimulatorWindowTracker.Target]
+        if let frontmostHostPID = windowTracker.frontmostHostPID {
+            let focusedDisplays = windowTracker.discoverTargets(
+                ownerPID: frontmostHostPID,
+                simulatorSize: Self.fallbackSimulatorSize.cgSize
+            )
+            displays = focusedDisplays.isEmpty ? discoveredDisplays : focusedDisplays
+        } else {
+            displays = discoveredDisplays
+        }
         if !displays.isEmpty {
             logger.info("discovered display hosts: \(displays.map { "\($0.descriptor.hostKind.rawValue):\($0.descriptor.deviceUDID ?? "unknown")" }.joined(separator: ","))")
         }
@@ -366,8 +380,6 @@ final class CaptureSession {
 
             nativeTarget = target
             state.resetAnchorLockForAttachment()
-            lastSimulatorPID = tracked.ownerPID
-            lastHostTarget = tracked
             frameAdjustment = OverlayFrameAdjustment()
             applyTrackedTarget(
                 tracked,
@@ -425,6 +437,96 @@ final class CaptureSession {
         }
     }
 
+    private func handleHostApplicationActivated(ownerPID: pid_t) {
+        guard state.snapshot.preferences.isEnabled,
+              !state.snapshot.isCalibrationMode,
+              !isAttaching else { return }
+        guard let nativeTarget else {
+            attemptAttach(promptForAccessibility: false)
+            return
+        }
+
+        let displays = windowTracker.discoverTargets(
+            ownerPID: ownerPID,
+            simulatorSize: nativeTarget.pointSize.cgSize
+        )
+        if displays.count == 1,
+           let tracked = displays.first,
+           let displayUDID = tracked.descriptor.deviceUDID,
+           displayUDID.caseInsensitiveCompare(nativeTarget.udid) == .orderedSame {
+            switchToActivatedHost(targetUDID: nativeTarget.udid, tracked: tracked, currentTarget: nativeTarget)
+            return
+        }
+        do {
+            let devices = try injector.listBootedSimulators()
+            switch SimulatorDisplaySelector.resolve(
+                displays: displays.map(\.descriptor),
+                devices: devices,
+                activatedOwnerPID: ownerPID
+            ) {
+            case .unavailable:
+                logger.warn("activated display host has no attachable Simulator screen pid=\(ownerPID)")
+            case .ambiguous:
+                logger.warn("activated display host is ambiguous pid=\(ownerPID)")
+            case let .selected(descriptor, record):
+                guard let tracked = displays.first(where: { $0.descriptor == descriptor }) else { return }
+                switchToActivatedHost(targetUDID: record.udid, tracked: tracked, currentTarget: nativeTarget)
+            }
+        } catch {
+            logger.error("activated display host discovery failed: \(error)")
+        }
+    }
+
+    private func switchToActivatedHost(
+        targetUDID: String,
+        tracked: SimulatorWindowTracker.Target,
+        currentTarget: SimulatorTarget
+    ) {
+        guard tracked.kind == .screen else {
+            logger.warn("activated display host screen is not ready pid=\(tracked.ownerPID)")
+            return
+        }
+        if lastHostTarget?.descriptor.representsSameDisplay(as: tracked.descriptor) == true {
+            return
+        }
+
+        let isSameDevice = targetUDID.caseInsensitiveCompare(currentTarget.udid) == .orderedSame
+        guard isSameDevice || automationState.isIdle else {
+            logger.warn("ignoring device switch while gesture automation is active target=\(targetUDID)")
+            return
+        }
+
+        do {
+            let target: SimulatorTarget
+            if isSameDevice {
+                target = currentTarget
+            } else {
+                coordinator.prepareForDeviceChange()
+                target = try injector.selectTarget(udid: targetUDID)
+                nativeTarget = target
+                state.resetAnchorLockForAttachment()
+            }
+
+            windowTracker.stop()
+            frameAdjustment = OverlayFrameAdjustment()
+            applyTrackedTarget(
+                tracked,
+                nativeTarget: target,
+                reason: isSameDevice ? "Display host focus changed" : "Focused Simulator device changed"
+            )
+            startWindowTracking(for: target, hostTarget: tracked)
+            retryTimer?.invalidate()
+            retryTimer = nil
+            state.transition(to: .active, target: selectedTarget)
+            logger.info(
+                "capture display focus switched host=\(tracked.descriptor.hostKind.rawValue) pid=\(tracked.ownerPID) target=\(target.udid)"
+            )
+        } catch {
+            logger.error("focused Simulator target switch failed: \(error)")
+            startWindowTracking(for: currentTarget, hostTarget: lastHostTarget ?? tracked)
+        }
+    }
+
     private func handleTrackedLookup(
         _ lookup: SimulatorWindowTracker.Lookup,
         expectedTarget: SimulatorTarget
@@ -455,7 +557,6 @@ final class CaptureSession {
                 return
             }
             guard !state.snapshot.isCalibrationMode else { return }
-            lastHostTarget = tracked
             applyTrackedTarget(
                 tracked,
                 nativeTarget: expectedTarget,
@@ -476,8 +577,12 @@ final class CaptureSession {
             nativeSimulatorSize: nativeTarget.pointSize
         )
         let orientedTarget = nativeTarget.withPointSize(geometry.simulatorSize)
-        guard selectedTarget != orientedTarget || !overlay.frame.isNearlyEqual(to: adjustedFrame) else {
+        let isSameDisplay = lastHostTarget?.descriptor.representsSameDisplay(as: tracked.descriptor) == true
+        guard selectedTarget != orientedTarget ||
+                !overlay.frame.isNearlyEqual(to: adjustedFrame) ||
+                !isSameDisplay else {
             lastTrackedFrame = tracked.frame
+            lastHostTarget = tracked
             return
         }
 
@@ -485,6 +590,7 @@ final class CaptureSession {
         awaitsTouchRelease = true
         selectedTarget = orientedTarget
         lastTrackedFrame = tracked.frame
+        lastHostTarget = tracked
         lastSimulatorPID = tracked.ownerPID
         overlay.show(
             frame: geometry.desktopFrame,

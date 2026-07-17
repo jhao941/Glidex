@@ -4,6 +4,17 @@ import Foundation
 public enum SimulatorDisplayHostKind: String, Equatable, Sendable {
     case legacySimulator
     case deviceHub
+
+    public init?(bundleIdentifier: String?) {
+        switch bundleIdentifier {
+        case "com.apple.iphonesimulator":
+            self = .legacySimulator
+        case "com.apple.dt.Devices":
+            self = .deviceHub
+        default:
+            return nil
+        }
+    }
 }
 
 public struct SimulatorDisplayDescriptor: Equatable, Sendable {
@@ -59,6 +70,17 @@ public enum SimulatorDisplaySelection: Sendable {
 }
 
 public enum SimulatorDisplaySelector {
+    public static func resolve(
+        displays: [SimulatorDisplayDescriptor],
+        devices: [BootedSimulatorRecord],
+        activatedOwnerPID: pid_t
+    ) -> SimulatorDisplaySelection {
+        resolve(
+            displays: displays.filter { $0.ownerPID == activatedOwnerPID },
+            devices: devices
+        )
+    }
+
     public static func resolve(
         displays: [SimulatorDisplayDescriptor],
         devices: [BootedSimulatorRecord]
